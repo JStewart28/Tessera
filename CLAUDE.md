@@ -62,6 +62,14 @@ required section → stop and ask the user before proceeding.
 - **Future Optimizations:** track in README; ask before adding an entry.
 - **Known Issues:** record in README what fails, how it reproduces, and whether
   it predates current work.
+- **Describe the code as it is now, never how it used to be.** Comments,
+  docstrings, error messages, the README and `docs/` say what the code does at
+  present. Do not narrate history: no "X CHANGE" or "X CORRECTION" notes, and
+  no "used to", "previously", "is gone", "no longer", "has since landed" or
+  "the old version". When you edit a passage that already does this, rewrite it
+  in the present tense. Task IDs are fine where they name pending work ("task
+  T4d, not yet implemented"). History belongs in git and in the
+  `tasks/*-progress-log.md` files, which are chronological by design and exempt.
 
 ---
 
