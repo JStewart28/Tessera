@@ -168,6 +168,23 @@ for ( int step = 0; step < nsteps; ++step )
   previous run's series rather than mixing the two. The previous run's frame
   `.h5`/`.xmf` files are not deleted — they are simply no longer listed. To keep an
   earlier series, give the new run a different master stem or directory.
+- **To continue a series after a restart**, reopen it instead:
+
+  ```cpp
+  Tessera::MeshSeries series( "bubble", Tessera::ReopenSeries{}, mesh.comm() );
+  series.write( mesh, "bubble_" + pad( step ), t );   // t > the last recorded time
+  ```
+
+  The reopen constructor is **collective on its communicator**, with every rank
+  passing the same master stem. Rank 0 reads `<masterStem>.xmfindex` and each
+  listed frame's `.h5` root attributes, rewrites the master from them, and
+  broadcasts the steps, so `numFrames()` reports the reopened frame count on every
+  rank. Later `write()` calls append to the index and the master. It throws
+  `std::runtime_error` on every rank, naming the index, if the index is missing or
+  empty, a line does not parse, its times are not strictly increasing, a frame stem
+  is in a different directory from the master, or a listed `.h5` or one of its root
+  attributes cannot be read. The index records each frame stem as the caller passed
+  it, so reopen from the same working directory the series was written from.
 - In Paraview, only the **temporal** XDMF3 reader (`Xdmf3ReaderT`) walks a temporal
   collection. If the master opens showing a single timestep, check the reader choice
   first: `grep -c '<Time Value=' bubble.xmf` tells you what the file actually holds.

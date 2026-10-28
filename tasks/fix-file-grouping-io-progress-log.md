@@ -369,3 +369,106 @@ answered: it truncates. The fresh-over-stale-index test T3 asked for exists in
 `test_xdmf_series.cpp`, so T4's test need not repeat it. Reopen must
 load the steps before any `write()`, which is what keeps the reopened index
 appended rather than truncated; recorded as T4 step 5.
+
+## T4
+
+**Status: implemented at `8dc3ede`; the exit criterion has not run.** Job
+`f3gs2JMqXWTR` (`flux batch scripts/tuolumne/run_unit_tests.flux unit -R
+xdmf_series_SERIAL -V`, submitted from the repo root with `TESSERA_REPO`
+exported) sat in `SCHED` for over twenty minutes: pdebug had 0 of 40 nodes free
+and 54 jobs pending or running, with priority 40560 (fairshare 0.41). It was
+cancelled without running, so it produced no output file. Provenance at
+submit: HEAD `8dc3edee9da2c958486f04ef81e6da9b47d02de4`, spack env
+`/g/g20/stewartj/spack_envs/tuolumne_trilinos`, compiler `CC` = Cray clang
+20.0.0. The next session resubmits the same command and appends the results
+here.
+
+**Built.** `make -j32` of the whole `build-tuolumne/` tree succeeds on the login
+node, including `tessera_test_xdmf_series_SERIAL` and `mesh_pipeline`. The only
+warning is the existing `-Wnontrivial-memcall` at
+`src/Tessera_HaloRebuild.hpp:99`.
+
+**Decisions (handed down with the task):**
+
+- The reopen constructor is `MeshSeries( std::string masterStem, ReopenSeries,
+  MPI_Comm comm )`, collective on `comm`. The constructor takes no mesh, so
+  without a communicator it cannot know its rank, and a failure seen only on
+  rank 0 would deadlock the next collective `writeMesh()`. `MPI_COMM_WORLD` is
+  never hard-coded.
+- Rank 0 does every file read and broadcasts the outcome. On failure every rank
+  throws the same `std::runtime_error`; on success every rank receives the same
+  steps.
+- Every frame stem in the index must share `detail::xdmfDirname()` with
+  `masterStem`; otherwise the reopen throws, naming both paths.
+- Each index line is split at its **last** space. An empty index, or any line
+  that fails to parse, throws.
+- HDF5 attributes are read through a new checked helper in
+  `Tessera_XdmfSeries.hpp`. `detail::readIntAttr`/`readU64Attr` are unchanged,
+  because `readMesh()` depends on them.
+
+**Decisions made in this session:**
+
+- **The outcome is one broadcast payload.** It is `'S'` followed by the packed
+  steps, or `'E'` followed by the full error text. This takes two `MPI_Bcast`
+  calls, one for the length and one for the bytes, and the success path and the
+  failure path use the same pair. Steps are packed as raw object bytes
+  (`detail::packSteps`/`unpackSteps`). That is safe because every rank runs the
+  same build on the same machine.
+- **Every reopen error carries one prefix:** `Tessera::MeshSeries: cannot reopen
+  the series in '<masterStem>.xmfindex': ...`. The inner text names the specific
+  file and line, or the file and attribute. So the index path appears in every
+  message, including `.h5` failures and a failed master rewrite, and the frame
+  file appears whenever it is the cause.
+- **The checked helper is a small RAII class, `detail::SeriesH5Reader`.** Its
+  constructor throws on a negative `H5Fopen`, `read` throws on a negative
+  `H5Aopen` or `H5Aread`, and the destructor closes the file. That keeps the
+  `.h5` from leaking when an attribute read throws mid-frame.
+- **A final line with no `\n` is rejected as a torn append.** The writer always
+  terminates each line. A crash mid-`fprintf` can leave `"stem 1.2"` where
+  `1.25` was meant, and that still parses as a number, so the missing newline is
+  the only reliable signal. This goes slightly beyond "a line that does not
+  parse"; it is stated in the docs.
+- **The time token must be consumed entirely by `strtod`.** Non-finite values
+  are not separately rejected. A `nan` line after the first fails the
+  strictly-increasing check, and so does any later `write()`.
+- **The reopen rewrites the master on rank 0 inside the same `try` block**
+  (Do step 5), so a failed rewrite is also broadcast and thrown everywhere.
+
+**Signatures added** (all in `src/Tessera_XdmfSeries.hpp`):
+
+```cpp
+struct Tessera::ReopenSeries {};
+Tessera::MeshSeries::MeshSeries( std::string masterStem, ReopenSeries, MPI_Comm comm );
+class  detail::SeriesH5Reader;   // readInt / readU64, throwing
+XdmfFrame detail::readSeriesFrame( const std::string& frameStem );
+std::vector<XdmfTimeStep> detail::readSeriesIndex( const std::string& masterStem );
+void detail::packSteps( std::string&, const std::vector<XdmfTimeStep>& );
+std::vector<XdmfTimeStep> detail::unpackSteps( const std::string&, std::size_t pos );
+```
+
+**Test added** to `tests/test_xdmf_series.cpp` under the stem
+`<masterStem>_reopen`. A first series writes frames at 0.0 and 0.5 and is
+destroyed. The test then reopens it on `MPI_COMM_WORLD` and checks
+`numFrames() == 2` on every rank. It also checks that the master rewritten by
+the reopen is byte-identical to the one the first object left; that assertion
+goes beyond the exit criterion. The reopened object then writes 1.25 and the
+test checks `numFrames() == 3` on every rank. On rank 0 it asserts three
+increasing `<Time Value=` (0, 0.5, 1.25), and that the first two child grids,
+each cut from its opening tag through its own `</Grid>`, are byte-identical to
+the first object's. It also asserts that the index holds all three lines, so it
+was appended to rather than replaced. Failure direction: the index rewritten
+with its two lines swapped (0.5 then 0), then the index deleted. Each case
+asserts, on every rank, that the reopen throws `std::runtime_error` and that
+`what()` contains the index path. Rank 0 prints each message for the record. The
+cleanup block removes the second master, its index, and all three frames'
+`.h5`/`.xmf`.
+
+**Bugs only running revealed:** not yet known, because the test has not run.
+
+**Affects:** V1 — a reopened master is worth opening only if the run shows the
+reopen rewriting the master byte-identically. The test asserts that, but it
+deletes its output, so V1 gains nothing new from a reopened master unless the
+T2-style cleanup-suppressed run is repeated on the `_reopen` stem. Recommend
+not adding it to V1's inputs. The master's bytes after a reopen are identical
+to the original by assertion, so any reader behaviour V1 observes on the T2/T3
+masters carries over.

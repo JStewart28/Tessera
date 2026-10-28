@@ -1755,9 +1755,14 @@ struct XdmfTimeStep { XdmfFrame frame; double time; };
 void writeXdmfSeries( const std::string& masterStem,
                       const std::vector<XdmfTimeStep>& steps );
 
+struct ReopenSeries {};                // tag: continue an existing series
+
 class MeshSeries                       // accumulates frames, rewrites the master
 {
-    explicit MeshSeries( std::string masterStem );
+    explicit MeshSeries( std::string masterStem );          // a new series
+    MeshSeries( std::string masterStem, ReopenSeries,       // continue the one in
+                MPI_Comm comm );                            // <masterStem>.xmfindex;
+                                                            // collective on comm
     template <class MeshT>             // collective on mesh.comm()
     void write( const MeshT& mesh, const std::string& frameStem, double time );
     std::size_t numFrames() const;     // rank-uniform
@@ -1801,6 +1806,27 @@ newly constructed `MeshSeries` starts a new series, so its first `write()` trunc
 any index already on disk; a rerun into the same directory therefore never inherits
 an earlier run's frames, which would otherwise surface at restart as a non-increasing
 time or, worse, as stale frames silently stitched into the series.
+
+The reopen constructor `MeshSeries( masterStem, ReopenSeries{}, comm )` continues
+that series. It is collective on `comm` — the constructor takes no mesh, so the
+communicator is what tells it its rank — and every rank passes the same
+`masterStem`. Rank 0 alone reads the index, splitting each line at its **last**
+space because the frame stem is written verbatim and may contain spaces. For each
+frame it reopens `<frameStem>.h5` serially and rebuilds the `XdmfFrame` from the
+root attributes `dim`, `scalar_bytes`, `Nv`, `Nf`, `n_user_v_fields`,
+`n_user_f_fields` and `uv_ext_<j>`/`uf_ext_<j>`, naming the fields as the writer does
+(dataset `u<j>`, display name `vu<j>`/`fu<j>`). These reads go through a checked
+reader that throws on a missing file or attribute, unlike `readMesh()`'s
+`readIntAttr`/`readU64Attr`, which read a missing attribute as 0. Rank 0 then rewrites
+the master and broadcasts either the steps or its error text. On failure every rank
+throws the same `std::runtime_error`, which names the index, so no rank goes on to a
+collective `write()` the others never reach. On success `_steps` is identical on
+every rank, so the reopened object appends exactly as the original would have. The
+reopen fails on a missing or empty index, a line that does not parse (including a
+last line with no newline, the mark of a torn append), times that are not strictly
+increasing, a frame stem in a different directory from the master (the index holds
+stems as the caller passed them, possibly relative, so a reopen from another working
+directory would resolve different files), or an unreadable frame file or attribute.
 
 In Paraview, only the *temporal* XDMF3 reader (`Xdmf3ReaderT`) walks a temporal
 collection; a master that opens showing one timestep is a reader-selection issue, and

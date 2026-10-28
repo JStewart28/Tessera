@@ -181,7 +181,7 @@ stem whose directory differs from the master's.
 
 ## Current state
 
-T1, T2 and T3 are done; T4 onward are unbuilt. What exists:
+T1, T2 and T3 are done; T4's code is committed but unverified; V1 is not started. What exists:
 
 - `Tessera::XdmfField` ([src/Tessera_Xdmf.hpp:32](../src/Tessera_Xdmf.hpp#L32))
   and `Tessera::XdmfFrame` ([:43](../src/Tessera_Xdmf.hpp#L43)), the latter
@@ -223,9 +223,17 @@ T1, T2 and T3 are done; T4 onward are unbuilt. What exists:
   the step on every rank, and on rank 0 appends to `<masterStem>.xmfindex` and
   rewrites the master. The first `write()` of a newly constructed series opens the
   index with `"w"`, not `"a"`, so a rerun under the same master stem replaces the
-  earlier run's index instead of appending to it. Nothing reads a written frame's
-  metadata back for a restart yet — that is T4, and `MeshSeries` keeps every frame
-  in memory.
+  earlier run's index instead of appending to it. `MeshSeries` keeps every frame's
+  metadata in memory.
+- The reopen constructor `MeshSeries( masterStem, ReopenSeries{}, comm )`
+  ([src/Tessera_XdmfSeries.hpp](../src/Tessera_XdmfSeries.hpp)), collective on
+  `comm`: rank 0 parses `<masterStem>.xmfindex` (`detail::readSeriesIndex`),
+  rebuilds each `XdmfFrame` from its `.h5` root attributes through the checked
+  serial reader `detail::SeriesH5Reader` (`detail::readSeriesFrame`), rewrites
+  the master, and broadcasts either the packed steps or the error text; a failure
+  throws the same `std::runtime_error`, naming the index, on every rank. The
+  reopened object starts with its steps loaded, so its first `write()` appends to
+  the index.
 - `tests/test_xdmf_series.cpp`, `unit`/`SERIAL`, ranks `1;2;3` — the first
   in-repo assertions on emitted XDMF text, including the user-field attribute
   block, and on the `.xmfindex`: a stale index planted before the first `write()`
@@ -441,7 +449,7 @@ on all three. A rerun with the same `--out` overwrites the frames, and its first
 8-line index T3's rerun observed, verified by `tests/test_xdmf_series.cpp` (see
 [the progress log](fix-file-grouping-io-progress-log.md#index-truncation-on-a-new-series)).
 
-### T4 — Restart: reopen an existing series and keep appending — **NOT STARTED**
+### T4 — Restart: reopen an existing series and keep appending — **IN PROGRESS** (code at `8dc3ede`; exit criterion not yet run, see the [T4 log](fix-file-grouping-io-progress-log.md#t4))
 
 **Depends on:** T2. Independent of T3. Beantik needs it: its restarts resume
 mid-series.
