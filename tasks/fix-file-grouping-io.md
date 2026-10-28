@@ -414,8 +414,8 @@ resolves to an existing file in the master's directory.
 
 ### T4 — Restart: reopen an existing series and keep appending — **NOT STARTED**
 
-**Depends on:** T2. Independent of T3; may be deferred indefinitely without
-blocking anything else.
+**Depends on:** T2. Independent of T3. Beantik needs it: its restarts resume
+mid-series.
 
 **Fill in:** `src/Tessera_XdmfSeries.hpp`, `tests/test_xdmf_series.cpp`.
 
@@ -438,10 +438,6 @@ blocking anything else.
    validate against the mesh template here: this constructor takes no mesh.
 4. Rewrite the master immediately from the reconstructed steps, so a reopen that
    succeeds is visible on disk before any new frame is written.
-
-**Additional information needed:** whether Beantik restarts by re-running from
-frame 0 or by resuming mid-series. If it always re-runs from 0, this task is
-unnecessary and should be closed rather than implemented — ask before starting.
 
 **Exit criterion:** `ctest -L unit -R xdmf_series_SERIAL` passes at np1-3 with an
 added case that writes two frames through one `MeshSeries`, destroys it,
