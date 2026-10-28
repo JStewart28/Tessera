@@ -104,13 +104,21 @@ Options parseOptions( int argc, char* argv[] )
     return opt;
 }
 
-// Output file stem for a given execution-space tag, rank count, and frame
-// index: "<out>_<tag>_np<size>_frame<i>" -> writeMesh() appends .h5/.xmf.
+// Master stem of one run()'s series for a given execution-space tag and rank
+// count: "<out>_<tag>_np<size>" -> MeshSeries writes <stem>.xmf, the file to
+// open in Paraview, plus <stem>.xmfindex.
+std::string seriesStem( const Options& opt, const std::string& tag, int size )
+{
+    return opt.outStem + "_" + tag + "_np" + std::to_string( size );
+}
+
+// Output file stem for frame `i` of that series: "<seriesStem>_frame<i>" ->
+// .h5 plus its own .xmf sidecar. Built from seriesStem() so every frame sits
+// in the master's directory, as MeshSeries requires.
 std::string frameStem( const Options& opt, const std::string& tag, int size,
                        int i )
 {
-    return opt.outStem + "_" + tag + "_np" + std::to_string( size ) + "_frame" +
-           std::to_string( i );
+    return seriesStem( opt, tag, size ) + "_frame" + std::to_string( i );
 }
 
 // ----------------------------------------------------------------------------
@@ -149,10 +157,14 @@ void run( int rank, int size, const std::string& tag, const Options& opt )
     distribute( mesh, halo, faceOwner );
 
     // Step 4: sync the ghost layer and write the "as distributed" baseline
-    // frame, before any adaptive refinement -- useful as frame 0 when
-    // stepping through the sequence in Paraview.
+    // frame, before any adaptive refinement, as frame 0 of this run()'s
+    // series. One MeshSeries per run() call, so each mesh type and execution
+    // space gets its own master and frames of different mesh types never
+    // share one. The example has no physical time, so each frame's time is
+    // its frame index as a double: 0.0 here, double( it ) in the loop below.
+    MeshSeries series( seriesStem( opt, tag, size ) );
     haloExchange( mesh, halo );
-    writeMesh( mesh, frameStem( opt, tag, size, 0 ) );
+    series.write( mesh, frameStem( opt, tag, size, 0 ), 0.0 );
     if ( rank == 0 )
         std::printf( "  [%s] frame 0: ownedF=%zu ownedE=%zu ownedV=%zu -> %s\n",
                      tag.c_str(), mesh.numOwnedFaces(), mesh.numOwnedEdges(),
@@ -216,9 +228,11 @@ void run( int rank, int size, const std::string& tag, const Options& opt )
             migrate( mesh, halo, dest );
         }
 
-        // 5d. Sync the rebuilt halo and write this iteration's frame.
+        // 5d. Sync the rebuilt halo and write this iteration's frame. Time is
+        // the frame index, double( it ), as for frame 0 above.
         haloExchange( mesh, halo );
-        writeMesh( mesh, frameStem( opt, tag, size, it ) );
+        series.write( mesh, frameStem( opt, tag, size, it ),
+                      static_cast<double>( it ) );
 
         if ( rank == 0 )
             std::printf( "  [%s] frame %d: ownedF=%zu ownedE=%zu ownedV=%zu "
@@ -237,6 +251,11 @@ void run( int rank, int size, const std::string& tag, const Options& opt )
     // Whole-run summary: per-region totals accumulated across every iteration
     // of this run() (the lifetime registry is never cleared by the resets).
     TESSERA_PRINT_TIMERS_TOTAL( MPI_COMM_WORLD );
+
+    if ( rank == 0 )
+        std::printf( "  [%s] series: %zu frames -> open %s.xmf in Paraview\n",
+                     tag.c_str(), series.numFrames(),
+                     series.masterStem().c_str() );
 }
 
 int main( int argc, char* argv[] )

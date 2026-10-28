@@ -14,8 +14,8 @@
 # ctest gate entry). Submits a batch job to the pdebug queue that runs the
 # 02_mesh_pipeline example at 4 MPI ranks. Kokkos::DefaultExecutionSpace is
 # HIP on Tuolumne, so the example's per-exec-space loop exercises the HIP
-# backend (in addition to its always-run Serial pass) and writes a parallel
-# HDF5+XDMF frame sequence via writeMesh() for each iteration.
+# backend (in addition to its always-run Serial pass) and, for each, writes its
+# parallel HDF5+XDMF frames through one MeshSeries.
 #
 # TESSERA_REPO must be exported in the submitting shell (flux copies this
 # script to a temp dir, so it cannot locate the repo from its own path).
@@ -26,9 +26,11 @@
 #   flux batch scripts/tuolumne/run_mesh_pipeline_example.flux
 #   flux batch scripts/tuolumne/run_mesh_pipeline_example.flux --subdiv 3 --iters 5 --frac 0.15 --balance
 #
-# Output .h5/.xmf frames land in the job's working directory (the directory
-# `flux batch` was submitted from) — inspect the sequence in Paraview by
-# opening the per-frame .xmf sidecars.
+# Output lands in the job's working directory (the directory `flux batch` was
+# submitted from) unless --out names another one. Each execution space's series
+# writes per-frame .h5/.xmf files plus one master <out>_<tag>_np<size>.xmf (and
+# its .xmfindex); open the master in Paraview to step through the sequence as
+# one timestepped dataset.
 
 #FLUX: --job-name=tessera-mesh-pipeline-example
 #FLUX: --queue=pdebug
@@ -52,6 +54,8 @@ echo "  System:    ${TESSERA_SYSTEM}"
 echo "  Build dir: ${TESSERA_BUILD_DIR}"
 echo "  Exe:       ${exe}"
 echo "  Args:      $*"
+echo "  Commit:    $(git -C "${TESSERA_REPO}" rev-parse HEAD)"
+echo "  Spack env: $(spack env status || true)"
 echo "  Started:   $(date)"
 echo ""
 
