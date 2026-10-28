@@ -446,40 +446,76 @@ on all three. A rerun with the same `--out` overwrites the frames, and its first
 **Depends on:** T2. Independent of T3. Beantik needs it: its restarts resume
 mid-series.
 
-**Fill in:** `src/Tessera_XdmfSeries.hpp`, `tests/test_xdmf_series.cpp`.
+**Fill in:** `src/Tessera_XdmfSeries.hpp`, `tests/test_xdmf_series.cpp`; the
+`MeshSeries` sections of [README.md:134-170](../README.md#L134-L170) and the
+Parallel I/O section of `docs/design.md` (the `MeshSeries` declaration block and
+the `.xmfindex` paragraph, [docs/design.md:1758-1803](../docs/design.md#L1758-L1803)).
 
 **Do:**
-1. Add a reopen constructor distinguished by a tag type, not a bool:
-   `struct ReopenSeries {}; MeshSeries( std::string masterStem, ReopenSeries )`.
-2. Read `<masterStem>.xmfindex` line by line for `(frameStem, time)`. Throw if
-   the index is missing, malformed, or its times are not strictly increasing —
-   a silently truncated series is exactly the quiet-degradation this project
-   forbids.
-3. Rebuild each `XdmfFrame` by reopening `<frameStem>.h5` **serially on rank 0**
-   (`H5Fopen`, `H5P_DEFAULT` — not MPI-IO) and reading the root attributes with
-   the existing helpers `detail::readIntAttr` / `detail::readU64Attr`
-   ([src/Tessera_IoCommon.hpp:308-323](../src/Tessera_IoCommon.hpp#L308-L323)):
-   `dim`, `scalar_bytes`, `Nv`, `Nf`, `n_user_v_fields` / `n_user_f_fields`, and
-   `uv_ext_<j>` / `uf_ext_<j>` for the extents. Reconstruct the field display
-   names by the same rule the writer uses — `"v" + "u<j>"` and `"f" + "u<j>"`
-   ([src/Tessera_HDF5Writer.hpp:250](../src/Tessera_HDF5Writer.hpp#L250),
-   [src/Tessera_HDF5Writer.hpp:361](../src/Tessera_HDF5Writer.hpp#L361)). Do not
-   validate against the mesh template here: this constructor takes no mesh.
-4. Rewrite the master immediately from the reconstructed steps, so a reopen that
-   succeeds is visible on disk before any new frame is written.
-5. Keep the reopened index. `write()` truncates the index only on the first frame
+1. Add a reopen constructor distinguished by a tag type, not a bool, and
+   collective on an explicit communicator:
+   `struct ReopenSeries {}; MeshSeries( std::string masterStem, ReopenSeries, MPI_Comm comm )`.
+   The communicator is required, not `MPI_COMM_WORLD`: the constructor takes no
+   mesh, so without one it cannot know its rank, cannot keep the step vector
+   rank-uniform, and cannot make a failure throw on every rank — and a caller on
+   a sub-communicator would be broken by a hard-coded world. Document it as
+   collective on `comm`, every rank passing the same `masterStem`.
+2. On rank 0 only, read `<masterStem>.xmfindex` line by line for
+   `(frameStem, time)`. Split each line at its **last** space — the frame stem is
+   written verbatim (`"%s %.17g\n"`) and may itself contain spaces. Fail if the
+   index is missing, empty, contains a line that does not parse, or its times are
+   not strictly increasing — a silently truncated series is exactly the
+   quiet-degradation this project forbids. Also fail if any frame stem's
+   `detail::xdmfDirname()` differs from that of `masterStem`, naming both: the
+   index records each stem as the caller passed it (a path, possibly relative),
+   so a reopen from a different working directory, or under a moved master,
+   would otherwise resolve different files; this is the same rule `write()`
+   enforces.
+3. Still on rank 0, rebuild each `XdmfFrame` by reopening `<frameStem>.h5`
+   **serially** (`H5Fopen` with `H5P_DEFAULT` — not MPI-IO) and reading the root
+   attributes `dim`, `scalar_bytes`, `Nv`, `Nf`, `n_user_v_fields` /
+   `n_user_f_fields`, and `uv_ext_<j>` / `uf_ext_<j>` for the extents. Read them
+   through a local checked helper in `Tessera_XdmfSeries.hpp` that fails, naming
+   the `.h5` path and the attribute, when `H5Fopen` or `H5Aopen` returns a
+   negative id. The shared `detail::readIntAttr` / `detail::readU64Attr`
+   ([src/Tessera_IoCommon.hpp:308-323](../src/Tessera_IoCommon.hpp#L308-L323))
+   do not check `H5Aopen` and return 0 for a missing attribute; they stay
+   unchanged because `readMesh()` uses them. `h5name` is
+   `detail::xdmfBasename( frameStem ) + ".h5"`, as the writer computes it
+   ([src/Tessera_HDF5Writer.hpp:415](../src/Tessera_HDF5Writer.hpp#L415)).
+   Reconstruct each field as the writer does — dataset `"u<j>"`, display name
+   `"v" + "u<j>"` / `"f" + "u<j>"`
+   ([src/Tessera_HDF5Writer.hpp:245-250](../src/Tessera_HDF5Writer.hpp#L245-L250),
+   [src/Tessera_HDF5Writer.hpp:356-361](../src/Tessera_HDF5Writer.hpp#L356-L361)).
+   Do not validate against the mesh template here: this constructor takes no mesh.
+4. Make the outcome rank-symmetric. Rank 0 catches its own failure from steps 2-3
+   and broadcasts a success flag plus the error text over `comm`; on failure
+   **every** rank throws `std::runtime_error` with that same message, so no rank
+   proceeds into a collective `writeMesh()` that the others never reach. On
+   success rank 0 broadcasts the reconstructed steps, so `_steps` — and therefore
+   `numFrames()` and the monotonic-time check in `write()` — is identical on every
+   rank.
+5. On rank 0, rewrite the master immediately from the reconstructed steps
+   (`writeXdmfSeries()`), so a reopen that succeeds is visible on disk before any
+   new frame is written.
+6. Keep the reopened index. `write()` truncates the index only on the first frame
    of an object whose step vector is empty; a reopened series starts with its
    steps loaded, so its next `write()` appends. The exit criterion's byte-identity
    check on the first two child grids depends on this.
+7. Document the reopen constructor in README.md and `docs/design.md` beside the
+   existing `MeshSeries` text: its signature, that it is collective on `comm`, that
+   it continues the series recorded in `<masterStem>.xmfindex`, and what it throws
+   on.
 
 **Exit criterion:** `ctest -L unit -R xdmf_series_SERIAL` passes at np1-3 with an
 added case that writes two frames through one `MeshSeries`, destroys it,
-constructs a second with `ReopenSeries`, writes a third frame, and asserts the
-master then holds three `<Time Value=` entries in increasing order and that the
-first two child grids are byte-identical to those the first object wrote.
-Failure direction: reopening with the `.xmfindex` deleted, and with its two time
-lines swapped into decreasing order, each throws `std::runtime_error` naming the
-index path.
+constructs a second with `ReopenSeries` on `MPI_COMM_WORLD`, writes a third frame,
+and asserts the master then holds three `<Time Value=` entries in increasing order
+and that the first two child grids are byte-identical to those the first object
+wrote; `numFrames()` on the reopened object is asserted on every rank (2 after
+construction, 3 after the write). Failure direction: reopening with the
+`.xmfindex` deleted, and with its two time lines swapped into decreasing order,
+each throws `std::runtime_error` naming the index path **on every rank**.
 
 ### V1 — Confirm in Paraview, in both reader families — **NOT STARTED**
 
