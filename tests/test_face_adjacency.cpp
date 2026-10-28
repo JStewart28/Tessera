@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Regression test: face -> face adjacency through shared edges
-// (tasks/face-adjacency.md, src/Tessera_FaceAdjacency.hpp).
+// (tasks/completed/face-adjacency.md, src/Tessera_FaceAdjacency.hpp).
 //
 // GROUND TRUTH IS EXACT AND INDEPENDENT OF TESSERA for the headline case: the
 // coarse icosphere soup is generated identically on every rank, face gid ==

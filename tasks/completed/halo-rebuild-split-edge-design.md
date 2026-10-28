@@ -1,10 +1,10 @@
 # Halo rebuild + geometric blue tie-break
 
 > **This file is self-contained.** A new session can be told *"read
-> `tasks/halo-rebuild-split-edge-design.md` and implement follow-up 1"* and needs
+> `tasks/completed/halo-rebuild-split-edge-design.md` and implement follow-up 1"* and needs
 > nothing else to start. Background lives in
-> [tasks/conforming-refinement.md](conforming-refinement.md) (design + Decision
-> record) and [tasks/conforming-refinement-debug.md](conforming-refinement-debug.md)
+> [tasks/completed/conforming-refinement.md](conforming-refinement.md) (design + Decision
+> record) and [tasks/completed/conforming-refinement-debug.md](conforming-refinement-debug.md)
 > (Task 8's verification evidence) — read those when a section says to, not before.
 >
 > **Both items are pre-existing library warts surfaced by Task 8, not conforming-mode
@@ -80,15 +80,15 @@ the `flux run` is wrapped in `timeout -k 5 <sec>`.
 
 | Thing | Where |
 |---|---|
-| `refine()` dispatcher → `detail::refineImpl()` | [Tessera_RefineParallel.hpp:1066](../src/Tessera_RefineParallel.hpp#L1066) → [:192](../src/Tessera_RefineParallel.hpp#L192) |
-| `migrate()` — one ~600-line function, rounds S/A/B/C/D | [Tessera_MeshMigrate.hpp:276-874](../src/Tessera_MeshMigrate.hpp#L276-L874) |
-| `MeshHalo` (the three plans) + `detail::buildKindPlan()` | [Tessera_Distribute.hpp:39](../src/Tessera_Distribute.hpp#L39), [:56](../src/Tessera_Distribute.hpp#L56) |
-| `closeFaces()` / `unclose()` / `recoverSplitEdges()` | [Tessera_RefineClosure.hpp:265](../src/Tessera_RefineClosure.hpp#L265) |
-| The blue tie-break itself | [Tessera_RefineClosure.hpp:374-392](../src/Tessera_RefineClosure.hpp#L374-L392) |
-| Aggregate header (a new header must be added here) | [Tessera.hpp:18-45](../src/Tessera.hpp#L18-L45) |
+| `refine()` dispatcher → `detail::refineImpl()` | [Tessera_RefineParallel.hpp:1066](../../src/Tessera_RefineParallel.hpp#L1066) → [:192](../../src/Tessera_RefineParallel.hpp#L192) |
+| `migrate()` — one ~600-line function, rounds S/A/B/C/D | [Tessera_MeshMigrate.hpp:276-874](../../src/Tessera_MeshMigrate.hpp#L276-L874) |
+| `MeshHalo` (the three plans) + `detail::buildKindPlan()` | [Tessera_Distribute.hpp:39](../../src/Tessera_Distribute.hpp#L39), [:56](../../src/Tessera_Distribute.hpp#L56) |
+| `closeFaces()` / `unclose()` / `recoverSplitEdges()` | [Tessera_RefineClosure.hpp:265](../../src/Tessera_RefineClosure.hpp#L265) |
+| The blue tie-break itself | [Tessera_RefineClosure.hpp:374-392](../../src/Tessera_RefineClosure.hpp#L374-L392) |
+| Aggregate header (a new header must be added here) | [Tessera.hpp:18-45](../../src/Tessera.hpp#L18-L45) |
 
 **Header install is a glob** (`FILES_MATCHING PATTERN "*.hpp"`,
-[CMakeLists.txt:118](../CMakeLists.txt#L118)), so adding a header needs **no CMake
+[CMakeLists.txt:118](../../CMakeLists.txt#L118)), so adding a header needs **no CMake
 edit** — only an `#include` line in `Tessera.hpp`.
 
 **Include graph is clean for a new shared header.** `RefineParallel.hpp` does *not*
@@ -102,7 +102,7 @@ include `MeshMigrate.hpp` and vice versa; both include `Distribute.hpp` and
 ## Problem
 
 `refine()` drops every ghost and clears the halo plans
-([Tessera_RefineParallel.hpp:1043-1045](../src/Tessera_RefineParallel.hpp#L1043-L1045)),
+([Tessera_RefineParallel.hpp:1043-1045](../../src/Tessera_RefineParallel.hpp#L1043-L1045)),
 and nothing rebuilds them. The general (non-replicated) 1-deep halo rebuild **exists**
 but is welded inside `migrate()`. Two consequences:
 
@@ -110,9 +110,9 @@ but is welded inside `migrate()`. Two consequences:
    not a synced ghost layer.
 2. **A second `refine()` throws.** `refineImpl()` builds `gid2lv` from
    `mesh.numVertices()` — owned **+ ghost** — at entry
-   ([:265-268](../src/Tessera_RefineParallel.hpp#L265-L268)), and Phase 3a needs the
+   ([:265-268](../../src/Tessera_RefineParallel.hpp#L265-L268)), and Phase 3a needs the
    *positions* of both endpoints of every midpoint the rank owns in order to
-   interpolate it ([:617-618](../src/Tessera_RefineParallel.hpp#L617-L618)). Midpoint
+   interpolate it ([:617-618](../../src/Tessera_RefineParallel.hpp#L617-L618)). Midpoint
    ownership is "lowest incident refining-face owner", so a rank can own the midpoint
    of an edge one of whose endpoints it holds only as a **ghost** — which the previous
    `refine()` already dropped. Result at np ≥ 2: `std::out_of_range:
@@ -142,15 +142,15 @@ A that the round letters hide, and it is the one most easily missed:
 
 | Round | Line | Job | Belongs to |
 |---|---|---|---|
-| S | [310](../src/Tessera_MeshMigrate.hpp#L310) | sibling-cohesion fixup on `dest` (Conforming only) | **migrate** |
-| **G** | [393-465](../src/Tessera_MeshMigrate.hpp#L393-L465) | **gather referenced-but-non-held vertex/edge tuples from their owners** via a gid coordinator | **rebuildHalo** |
-| A | [468](../src/Tessera_MeshMigrate.hpp#L468) | move owned faces + their verts/edges to destinations | **migrate** |
-| B | [515](../src/Tessera_MeshMigrate.hpp#L515) | ownership (lowest-rank) + ghost discovery via coordinators | **rebuildHalo** |
-| C | [587](../src/Tessera_MeshMigrate.hpp#L587) | fetch ghost faces (+ their verts/edges) from face owners | **rebuildHalo** |
-| D | [659](../src/Tessera_MeshMigrate.hpp#L659) | assemble owned-first AoSoAs + CSR + keys + the three halo plans | **rebuildHalo** |
+| S | [310](../../src/Tessera_MeshMigrate.hpp#L310) | sibling-cohesion fixup on `dest` (Conforming only) | **migrate** |
+| **G** | [393-465](../../src/Tessera_MeshMigrate.hpp#L393-L465) | **gather referenced-but-non-held vertex/edge tuples from their owners** via a gid coordinator | **rebuildHalo** |
+| A | [468](../../src/Tessera_MeshMigrate.hpp#L468) | move owned faces + their verts/edges to destinations | **migrate** |
+| B | [515](../../src/Tessera_MeshMigrate.hpp#L515) | ownership (lowest-rank) + ghost discovery via coordinators | **rebuildHalo** |
+| C | [587](../../src/Tessera_MeshMigrate.hpp#L587) | fetch ghost faces (+ their verts/edges) from face owners | **rebuildHalo** |
+| D | [659](../../src/Tessera_MeshMigrate.hpp#L659) | assemble owned-first AoSoAs + CSR + keys + the three halo plans | **rebuildHalo** |
 
 **Round G is not optional and it is the heart of the matter.** Its own comment
-([:382-385](../src/Tessera_MeshMigrate.hpp#L382-L385)) says outright that `migrate()`
+([:382-385](../../src/Tessera_MeshMigrate.hpp#L382-L385)) says outright that `migrate()`
 "is the deferred post-refine ghost builder ... so it must recover those referenced
 tuples before round A can move a face with its full vertex/edge pack." After
 `refine()`, an owned face can reference a vertex the rank does not hold at all — always
@@ -161,10 +161,10 @@ precisely on the common Conforming-mode case.
 
 Rounds B/C/D consume exactly three things produced by A: `faceById`, `vById`, `eById`
 (gid-keyed `std::map`s of the tuples this rank now owns/references,
-[:471-473](../src/Tessera_MeshMigrate.hpp#L471-L473)). **That is the entire interface**
+[:471-473](../../src/Tessera_MeshMigrate.hpp#L471-L473)). **That is the entire interface**
 between the halves. Note G feeds `heldV`/`heldE`
-([:386-391](../src/Tessera_MeshMigrate.hpp#L386-L391), built from the host copies taken
-at [:297](../src/Tessera_MeshMigrate.hpp#L297)), which A then packs into those maps —
+([:386-391](../../src/Tessera_MeshMigrate.hpp#L386-L391), built from the host copies taken
+at [:297](../../src/Tessera_MeshMigrate.hpp#L297)), which A then packs into those maps —
 so `rebuildHalo()` needs **G, then a local fill of the three maps from owned faces,
 then B/C/D**. Ordering differs between the two callers: `migrate()` runs S→G→A→BCD,
 `rebuildHalo()` runs G→fill→BCD.
@@ -193,7 +193,7 @@ Then:
 
 * `migrate()` becomes rounds S + A, ending with a call to the shared B/C/D code.
 * `refineImpl()` replaces the three `halo.*plan.clear()` calls at
-  [:1043-1045](../src/Tessera_RefineParallel.hpp#L1043-L1045) with `rebuildHalo(mesh,
+  [:1043-1045](../../src/Tessera_RefineParallel.hpp#L1043-L1045) with `rebuildHalo(mesh,
   halo)`.
 
 **Factor G and B/C/D into two `detail::` helpers** and have both callers use them. Do
@@ -220,7 +220,7 @@ is what makes follow-up 2's persistent-split-edge case solvable locally.
 ### Decision to make: does `rebuildHalo()` preserve local ordering?
 
 Round D currently canonicalises to **owned-first, each kind ascending by gid**
-([:662-695](../src/Tessera_MeshMigrate.hpp#L662-L695)). Two options:
+([:662-695](../../src/Tessera_MeshMigrate.hpp#L662-L695)). Two options:
 
 **(A) Keep the gid-sort (recommended).** Reuse round D verbatim; least code, least
 risk. The payoff is a genuinely useful new invariant: **local index order becomes a
@@ -243,7 +243,7 @@ observe it through gid-derived masks.
 
 `refineImpl()` step 3j builds a deliberately **incomplete** owned-vertex 1-ring CSR
 "best-effort ... because ghost faces/edges are dropped"
-([:976-1036](../src/Tessera_RefineParallel.hpp#L976-L1036)). Round D rebuilds the CSR
+([:976-1036](../../src/Tessera_RefineParallel.hpp#L976-L1036)). Round D rebuilds the CSR
 completely, so 3j becomes dead work. Delete it in the same change and say so in the
 commit — but only after the suite is green with `rebuildHalo()` in place, so a failure
 is attributable.
@@ -251,9 +251,9 @@ is attributable.
 ## Implementation steps
 
 1. **Create `src/Tessera_HaloRebuild.hpp`** with the license header. Move round G
-   ([:393-465](../src/Tessera_MeshMigrate.hpp#L393-L465)) into
+   ([:393-465](../../src/Tessera_MeshMigrate.hpp#L393-L465)) into
    `detail::gatherReferencedTuples()` and rounds B/C/D
-   ([:515-872](../src/Tessera_MeshMigrate.hpp#L515-L872)) into
+   ([:515-872](../../src/Tessera_MeshMigrate.hpp#L515-L872)) into
    `detail::finishHaloAndAssemble( mesh, halo, faceById, vById, eById )`. Pure code
    motion — **make this its own commit and verify the gate is still green before
    changing behaviour.** The `MigrateStats` fields that rounds G and B/C/D populate
@@ -265,9 +265,9 @@ is attributable.
 3. **Rewrite `migrate()`** as S → `gatherReferencedTuples()` → A →
    `finishHaloAndAssemble()`. Gate must stay green — still no behaviour change.
 4. **Call it from `refineImpl()`**: replace the three `clear()` calls at
-   [:1043-1045](../src/Tessera_RefineParallel.hpp#L1043-L1045). Update the
+   [:1043-1045](../../src/Tessera_RefineParallel.hpp#L1043-L1045). Update the
    INVALIDATION comment there and the header contract at
-   [:78](../src/Tessera_RefineParallel.hpp#L78) ("CLEARS the passed halo. A
+   [:78](../../src/Tessera_RefineParallel.hpp#L78) ("CLEARS the passed halo. A
    haloExchange() must not be...") — that text becomes wrong.
 5. **Delete the workaround from the tests** (this is the acceptance test, below).
 6. **Delete step 3j** and simplify.
@@ -283,13 +283,13 @@ this defect; every one must be removable with the suite still green:
 
 | Test | Sites |
 |---|---|
-| `test_refine_splitedges.cpp` | [415-418](../tests/test_refine_splitedges.cpp#L415-L418) |
-| `test_refine_conforming.cpp` | [293-296](../tests/test_refine_conforming.cpp#L293-L296) (mesh), [299-302](../tests/test_refine_conforming.cpp#L299-L302) (control) |
-| `test_conforming_migrate.cpp` | [203-207](../tests/test_conforming_migrate.cpp#L203-L207) (fixture) |
-| `test_conforming_operators.cpp` | [312-320](../tests/test_conforming_operators.cpp#L312-L320) (fixture) |
-| `test_conforming_determinism.cpp` | [302-305](../tests/test_conforming_determinism.cpp#L302-L305), [558-561](../tests/test_conforming_determinism.cpp#L558-L561), [668-671](../tests/test_conforming_determinism.cpp#L668-L671) |
-| `test_conforming_quality.cpp` | [467](../tests/test_conforming_quality.cpp#L467) |
-| `test_markquality_conforming.cpp` | [265](../tests/test_markquality_conforming.cpp#L265) |
+| `test_refine_splitedges.cpp` | [415-418](../../tests/test_refine_splitedges.cpp#L415-L418) |
+| `test_refine_conforming.cpp` | [293-296](../../tests/test_refine_conforming.cpp#L293-L296) (mesh), [299-302](../../tests/test_refine_conforming.cpp#L299-L302) (control) |
+| `test_conforming_migrate.cpp` | [203-207](../../tests/test_conforming_migrate.cpp#L203-L207) (fixture) |
+| `test_conforming_operators.cpp` | [312-320](../../tests/test_conforming_operators.cpp#L312-L320) (fixture) |
+| `test_conforming_determinism.cpp` | [302-305](../../tests/test_conforming_determinism.cpp#L302-L305), [558-561](../../tests/test_conforming_determinism.cpp#L558-L561), [668-671](../../tests/test_conforming_determinism.cpp#L668-L671) |
+| `test_conforming_quality.cpp` | [467](../../tests/test_conforming_quality.cpp#L467) |
+| `test_markquality_conforming.cpp` | [265](../../tests/test_markquality_conforming.cpp#L265) |
 
 Do **not** touch the `dest`-vector uses in `test_migrate_mesh.cpp`,
 `test_loadbalance.cpp` or `test_io.cpp` that perform a *genuine* migration — check
@@ -331,7 +331,7 @@ mask precisely to be ordering-immune) must be **byte-identical**. Treat any chan
   after (baseline: 842 s\*proc / 14.3 min). If it matters, a `bool rebuild = true`
   parameter is the escape hatch — but do not add it speculatively.
 * **`loadBalance()`** calls `migrate()` internally
-  ([Tessera_Zoltan2Balancer.hpp](../src/Tessera_Zoltan2Balancer.hpp)); confirm it goes
+  ([Tessera_Zoltan2Balancer.hpp](../../src/Tessera_Zoltan2Balancer.hpp)); confirm it goes
   through the refactored path.
 * Sequence steps 1→3 as **no-behaviour-change commits** and run the gate between them.
   The edge-gid defect in D3 hid behind an XOR checksum for two rank counts; do not
@@ -345,7 +345,7 @@ mask precisely to be ordering-immune) must be **byte-identical**. Treat any chan
 
 The blue closure pattern splits the quad `(A, q0, q1, C)` along one of **two** valid
 diagonals. The tie-break is *"connect the midpoint with the lower GID to its opposite
-corner"* ([Tessera_RefineClosure.hpp:374-392](../src/Tessera_RefineClosure.hpp#L374-L392)).
+corner"* ([Tessera_RefineClosure.hpp:374-392](../../src/Tessera_RefineClosure.hpp#L374-L392)).
 Midpoint gids are globally agreed within one run, so the closure is
 **partition-independent at a fixed rank count** — but they come from an `MPI_Exscan`,
 so they are **not the same values at a different rank count**. The same red mesh
@@ -395,8 +395,8 @@ attached to the edge, not computed from corner positions."**
 
 Phase 2 step 2c already delivers each split edge's midpoint gid from the midpoint
 owner to every co-sharer, via `detail::KeyGid`
-([Tessera_RefineParallel.hpp:172-176](../src/Tessera_RefineParallel.hpp#L172-L176))
-over an `allToAllV` at [:565](../src/Tessera_RefineParallel.hpp#L565):
+([Tessera_RefineParallel.hpp:172-176](../../src/Tessera_RefineParallel.hpp#L172-L176))
+over an `allToAllV` at [:565](../../src/Tessera_RefineParallel.hpp#L565):
 
 ```cpp
 struct KeyGid { EdgeKey key; GlobalId gid; };          // today
@@ -438,7 +438,7 @@ inline double edgeLen2Canonical( GlobalId ga, const double* pa,
 
 ### The one open sub-problem: persistent split edges
 
-`forEachSubEdge()` ([:364-375](../src/Tessera_RefineParallel.hpp#L364-L375)) advertises
+`forEachSubEdge()` ([:364-375](../../src/Tessera_RefineParallel.hpp#L364-L375)) advertises
 a **persistently** split edge `(x,y)` *only as its two halves* `(x,m)`, `(m,y)` —
 never as `(x,y)`. So Phase 2 never sees the key `(x,y)` and cannot deliver its `len2`.
 But a red face with a persistently split edge is exactly the "kept face must be closed
@@ -500,7 +500,7 @@ compare the two midpoints' **quantised positions** lexicographically — positio
 rank-count stable, which is exactly why `conforming_determinism` compares by them.
 That needs the midpoint *position* delivered in `KeyGid` (3 more scalars) rather than
 just `len2`. Reuse the quantisation from
-[test_conforming_determinism.cpp:154-163](../tests/test_conforming_determinism.cpp#L154-L163)
+[test_conforming_determinism.cpp:154-163](../../tests/test_conforming_determinism.cpp#L154-L163)
 (`llround(p[d] * 1e9)` + `hashCombine`) so test and library agree. **Measure before
 paying for this.**
 
@@ -508,32 +508,32 @@ paying for this.**
 
 1. **Land follow-up 1 first.** Option 1 above depends on it.
 2. Add `edgeLen2Canonical()` and `nBlueDiagTie` to `ClosureStats`
-   ([Tessera_RefineClosure.hpp:170-173](../src/Tessera_RefineClosure.hpp#L170-L173)).
+   ([Tessera_RefineClosure.hpp:170-173](../../src/Tessera_RefineClosure.hpp#L170-L173)).
 3. Extend `detail::KeyGid` with `len2`; populate it at
-   [:556-563](../src/Tessera_RefineParallel.hpp#L556-L563) from the owner's held
+   [:556-563](../../src/Tessera_RefineParallel.hpp#L556-L563) from the owner's held
    endpoints; build `len2Of` from `midGid`'s own entries **and** the received ones at
-   [:566-567](../src/Tessera_RefineParallel.hpp#L566-L567).
+   [:566-567](../../src/Tessera_RefineParallel.hpp#L566-L567).
 4. Fill `len2Of` for persistent split edges via option 1, next to
    `recoverSplitEdges()`, and union it in exactly where `persistentSplit` is unioned
-   into `midGid` ([:569+](../src/Tessera_RefineParallel.hpp#L569)).
+   into `midGid` ([:569+](../../src/Tessera_RefineParallel.hpp#L569)).
 5. Add the `len2Of` parameter to `closeFaces()` and switch the tie-break. **Seven call
-   sites** must be updated — [RefineParallel.hpp:726](../src/Tessera_RefineParallel.hpp#L726),
-   [Refine.hpp:643](../src/Tessera_Refine.hpp#L643),
-   [MeshInvariants.hpp:613](../tests/MeshInvariants.hpp#L613), and
-   `test_refine_closure.cpp` [145](../tests/test_refine_closure.cpp#L145),
-   [352](../tests/test_refine_closure.cpp#L352),
-   [369](../tests/test_refine_closure.cpp#L369),
-   [492](../tests/test_refine_closure.cpp#L492). Defaulting the parameter to `{}`
+   sites** must be updated — [RefineParallel.hpp:726](../../src/Tessera_RefineParallel.hpp#L726),
+   [Refine.hpp:643](../../src/Tessera_Refine.hpp#L643),
+   [MeshInvariants.hpp:613](../../tests/MeshInvariants.hpp#L613), and
+   `test_refine_closure.cpp` [145](../../tests/test_refine_closure.cpp#L145),
+   [352](../../tests/test_refine_closure.cpp#L352),
+   [369](../../tests/test_refine_closure.cpp#L369),
+   [492](../../tests/test_refine_closure.cpp#L492). Defaulting the parameter to `{}`
    keeps them compiling, but **an empty map must not silently mean "gid rule"** —
    that is exactly D6's default-on-miss footgun. Make a missing `len2` for an edge
    that *is* split a hard `Kokkos::abort` naming the edge, and have the serial-only
    call sites pass real lengths.
-6. `refineLocalConforming()` ([Tessera_Refine.hpp:580](../src/Tessera_Refine.hpp#L580))
+6. `refineLocalConforming()` ([Tessera_Refine.hpp:580](../../src/Tessera_Refine.hpp#L580))
    needs the same treatment — it has all positions locally, so this is easy, but do
    not skip it: `refine_closure` covers that path and would otherwise diverge from the
    distributed one.
 7. Rewrite the header note at
-   [Tessera_RefineClosure.hpp:87-118](../src/Tessera_RefineClosure.hpp#L87-L118),
+   [Tessera_RefineClosure.hpp:87-118](../../src/Tessera_RefineClosure.hpp#L87-L118),
    which currently explains at length why this *cannot* be done.
 
 ## Acceptance
@@ -597,7 +597,7 @@ paying for this.**
 
   **The one thing an initial read of `migrate()` gets wrong, corrected here before it
   cost anyone a debugging cycle:** there is an unlabelled **round G** between S and A
-  ([:393-465](../src/Tessera_MeshMigrate.hpp#L393-L465)) that gathers
+  ([:393-465](../../src/Tessera_MeshMigrate.hpp#L393-L465)) that gathers
   referenced-but-non-held vertex/edge tuples from their owners, and it belongs to the
   halo half, not the move half. The five round *letters* hide it. It is not optional —
   after `refine()` an owned face can reference a vertex the rank does not hold at all

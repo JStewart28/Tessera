@@ -398,7 +398,7 @@ migration path).
     `hdf5@1.14.3.7 +mpi` at `/opt/cray/pe/hdf5-parallel/1.14.3.7/crayclang/20.0`
     (Cray's parallel HDF5 module, not a from-source spack build). No install/
     reinstall was needed. Snapshot committed to
-    [systems/tuolumne/spack.yaml](systems/tuolumne/spack.yaml) (verbatim copy of the live
+    [systems/tuolumne/spack.yaml](../../systems/tuolumne/spack.yaml) (verbatim copy of the live
     env file).
   - Existing gate untouched (no rebuild needed — nothing in the mesh library or its
     dependencies changed); Steps ≤7b remain green as last verified in the Step 7b
@@ -1055,7 +1055,7 @@ migration path).
 
   **10a (Sonnet):**
   > Implement Milestone-1 Step 10a (edge-length quality-based refinement marking)
-  > in Tessera. Read `tasks/milestone1_mesh.md` in full first — the "Step 10 SPEC"
+  > in Tessera. Read `tasks/completed/milestone1_mesh.md` in full first — the "Step 10 SPEC"
   > progress-log entry (§10.0–10.2, 10.4–10.5) is your complete spec; implement it
   > with no new design decisions. Create `src/Tessera_MarkQuality.hpp` with the
   > `QualityCriterion` concept, `EdgeLengthCriterion<Scalar>`, and the
@@ -1078,7 +1078,7 @@ migration path).
 
   **10b (Opus):**
   > Implement Milestone-1 Step 10b (curvature/dihedral quality-based refinement
-  > marking) in Tessera, on top of a landed Step 10a. Read `tasks/milestone1_mesh.md`
+  > marking) in Tessera, on top of a landed Step 10a. Read `tasks/completed/milestone1_mesh.md`
   > in full first — the "Step 10 SPEC" entry (§10.0–10.1, 10.3–10.5) is your spec.
   > Append `CurvatureCriterion<Scalar>` to `src/Tessera_MarkQuality.hpp` per §10.3:
   > device-compute per-owned-face unit normals (Dim==3; Dim==2 returns all-zero),
@@ -1268,7 +1268,7 @@ migration path).
   >
   > Diagnose and fix a distributed-run crash in Tessera's in-progress Step
   > 10a (edge-length quality-based refinement marking). Read
-  > `tasks/milestone1_mesh.md` in full first, especially the "Step 10 SPEC"
+  > `tasks/completed/milestone1_mesh.md` in full first, especially the "Step 10 SPEC"
   > entry (§10.0-10.2, 10.4-10.5) and the "Step 10a in progress... BLOCKED"
   > entry immediately above this prompt, which has the full symptom,
   > repro steps, and a leading (unconfirmed) hypothesis.
@@ -1309,7 +1309,7 @@ migration path).
   > test-only issue, **stop and escalate to Opus** — that would mean this is
   > a distributed-correctness design question, not a mechanical fix, and is
   > out of scope for a Sonnet session per this repo's Sonnet/Opus contract
-  > (see the Step-contract table near the top of `tasks/milestone1_mesh.md`).
+  > (see the Step-contract table near the top of `tasks/completed/milestone1_mesh.md`).
   >
   > Once green at np1-5 for both SERIAL and HIP: remove the temporary debug
   > `fprintf(stderr, ...)` lines from `tests/test_markquality_edge.cpp`
@@ -1322,7 +1322,7 @@ migration path).
   > the full regression gate (`flux batch
   > scripts/tuolumne/run_regression_minset.flux`, or the dev runner with the
   > `regression` label), and append a **new** Step-10a completion entry to
-  > `tasks/milestone1_mesh.md` (do not edit this blocked entry — append
+  > `tasks/completed/milestone1_mesh.md` (do not edit this blocked entry — append
   > below it) reporting: the actual new regression count (expect 60/60,
   > per the discrepancy noted above — call it out either way), the unit
   > count (expect unchanged 28/28), whether the device kernel proved

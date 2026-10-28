@@ -396,7 +396,7 @@ splitEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& halo,
         // unrelated parts of the surface together -- V stops growing, Euler
         // breaks by one per split, and an edge appears between two nearly
         // antipodal points. Found by test_collapse_edges' composed
-        // split/flip/collapse loop (tasks/edge-collapse.md check 14).
+        // split/flip/collapse loop (tasks/completed/edge-collapse.md check 14).
         long long localMaxV = -1;
         for ( int i = 0; i < nOwnedV; ++i )
             localMaxV = std::max( localMaxV, static_cast<long long>( v_gid( i ) ) );

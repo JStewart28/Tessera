@@ -1488,7 +1488,7 @@ at the gate definition (label `regression` × {SERIAL, HIP} × ranks 1–5), `ct
 unit` fully green, `format-check` clean, and the *Open failures* list empty.
 
 **Open failures.** Task 8 is being worked in
-[tasks/conforming-refinement-debug.md](conforming-refinement-debug.md), which
+[tasks/completed/conforming-refinement-debug.md](conforming-refinement-debug.md), which
 breaks it into ordered sub-tasks D1–D8 and carries the live failure list, the
 build/run recipe, and the harness traps. **Read that file, not this section, to
 resume Task 8.**

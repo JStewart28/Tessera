@@ -9,7 +9,7 @@
  * SPDX-License-Identifier: BSD-3-Clause                                    *
  ****************************************************************************/
 
-// Regression test: the lat/lon (UV) sphere generator, tasks/latlon-sphere.md.
+// Regression test: the lat/lon (UV) sphere generator, tasks/completed/latlon-sphere.md.
 //
 // generateLatLonSphere()/buildLatLonSphere() exist because an icosphere is *too
 // good* a test surface -- nearly isotropic, nearly equilateral triangles, almost
@@ -35,7 +35,7 @@
 //                        nothing else in the suite would catch it.
 //
 // Registered at both SERIAL and HIP over ranks 1-5; gate promotion is
-// pre-authorized by tasks/latlon-sphere.md.
+// pre-authorized by tasks/completed/latlon-sphere.md.
 
 #include "MeshInvariants.hpp"
 
@@ -500,7 +500,7 @@ int runAnisotropy( int rank )
     check( vCoarse > 0.0 && vFine > 0.0 );
     check( defCoarse > 0.0 && defFine > 0.0 ); // from below
     check( defFine < defCoarse );              // and converging
-    // NOTE ON TOLERANCES. tasks/latlon-sphere.md asked for (9,12) "within 5%".
+    // NOTE ON TOLERANCES. tasks/completed/latlon-sphere.md asked for (9,12) "within 5%".
     // That figure is arithmetically unreachable: the closed form above gives
     // V(9,12) = 3.84812443 against 4pi/3 = 4.18879020, an 8.13% deficit, and
     // an inscribed polyhedron cannot do better than its own vertices. The 5%
@@ -740,7 +740,7 @@ int runDownstream( int rank, int size, const char* tag,
 // ---------------------------------------------------------------------------
 // Check 11: markByQuality on a DELIBERATELY very anisotropic surface, (33,8).
 //
-// tasks/latlon-sphere.md predicted "marks the polar bands and not the
+// tasks/completed/latlon-sphere.md predicted "marks the polar bands and not the
 // equatorial ones". The prediction is INVERTED, and the geometry says so
 // unambiguously rather than the library misbehaving. At (33,8) the meridional
 // step is dtheta = pi/32 (chord 0.0981, latitude-independent) while the in-ring

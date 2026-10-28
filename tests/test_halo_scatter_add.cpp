@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Regression test: GHOST SCATTER-ADD, the reverse halo
-// (tasks/halo-scatter-add.md).
+// (tasks/completed/halo-scatter-add.md).
 //
 // haloExchange() is a pure gather (owner -> ghost, overwrite). haloScatterAdd()
 // is its missing reverse (ghost -> owner, +=), which is the other half of the

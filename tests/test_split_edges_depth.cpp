@@ -9,7 +9,7 @@
  * SPDX-License-Identifier: BSD-3-Clause                                    *
  ****************************************************************************/
 
-// Test: SPLITEDGES TRIANGLE SHAPE QUALITY OVER SPLIT DEPTH (tasks/edge-split.md,
+// Test: SPLITEDGES TRIANGLE SHAPE QUALITY OVER SPLIT DEPTH (tasks/completed/edge-split.md,
 // risk R12) -- how far a repeated splitEdges() drive can push triangle shape, and
 // whether the answer depends on the round count or on the MASK.
 //

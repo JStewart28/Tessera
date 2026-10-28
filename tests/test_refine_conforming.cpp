@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Regression test: distributed CONFORMING refinement (Task 4 of
-// tasks/conforming-refinement.md). This is the milestone test for the feature.
+// tasks/completed/conforming-refinement.md). This is the milestone test for the feature.
 //
 // refine() on a RefinementMode::Conforming mesh un-closes the transient closure
 // layer, runs the same 2:1-balanced red engine as the hanging-node mode, and

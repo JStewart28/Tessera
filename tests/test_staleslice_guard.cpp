@@ -22,7 +22,7 @@
 // Mesh::generation() -- a slice taken before it must survive being copied
 // again afterward with no abort.
 //
-// Case 3: the CONFORMING refine path (tasks/conforming-refinement.md, Task 7).
+// Case 3: the CONFORMING refine path (tasks/completed/conforming-refinement.md, Task 7).
 // It is a distinct hazard from the hanging-node path, not the same one twice:
 // conforming refine() un-closes the transient closure layer and re-closes it,
 // so it changes the local face count -- and reallocates the face AoSoA -- even

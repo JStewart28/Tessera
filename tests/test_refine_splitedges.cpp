@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Regression test: distributed split-edge discovery (conforming refinement,
-// Task 3 of tasks/conforming-refinement.md).
+// Task 3 of tasks/completed/conforming-refinement.md).
 //
 // refine()'s Phase 2 now advertises the edges of EVERY owned face — refining and
 // kept — so that RefineResult::midpoints is a complete SPLIT-EDGE MAP: for each

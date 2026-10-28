@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Test: TRIANGLE SHAPE QUALITY OVER REFINEMENT DEPTH (Task 7 of
-// tasks/conforming-refinement.md) -- the guarantee that buys the closure its
+// tasks/completed/conforming-refinement.md) -- the guarantee that buys the closure its
 // "transient" design.
 //
 // A closure that PERSISTED would be a disaster for shape: bisecting an already

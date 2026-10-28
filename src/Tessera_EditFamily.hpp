@@ -23,7 +23,7 @@ namespace Tessera
 // ============================================================================
 //
 // Tessera has TWO disjoint families of topological edit, and a mesh belongs to
-// exactly one of them (tasks/edge-split.md, Decision 1):
+// exactly one of them (tasks/completed/edge-split.md, Decision 1):
 //
 //   HIERARCHICAL   refine()  /  refineLocal()
 //                  Maintains the 2:1 LEVEL BALANCE and, in

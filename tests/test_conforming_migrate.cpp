@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Regression test: migrate() / loadBalance() / halo rebuild on a CONFORMING
-// mesh (Task 5 of tasks/conforming-refinement.md).
+// mesh (Task 5 of tasks/completed/conforming-refinement.md).
 //
 // The hazard the closure introduces to redistribution is sibling splitting. A
 // closure child names its retired red parent outright, so un-closing is local

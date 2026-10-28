@@ -98,7 +98,7 @@ namespace Tessera
 //
 //     WHY LENGTHS ARE PASSED IN RATHER THAN COMPUTED HERE, and it is the whole
 //     reason this rule took two attempts (Task 8 D6, Decision 11 in
-//     tasks/conforming-refinement.md): the closure runs on the UN-CLOSED red
+//     tasks/completed/conforming-refinement.md): the closure runs on the UN-CLOSED red
 //     layer, whose corners come from closure children's ClosureParentVerts, and a
 //     child may name a vertex gid its rank does not hold -- the documented risk
 //     point 4. Those are PARENT corners, not neighbours, so a 1-deep halo does

@@ -9,7 +9,7 @@
  * SPDX-License-Identifier: BSD-3-Clause                                    *
  ****************************************************************************/
 
-// Regression test: caller-driven edge collapse (tasks/edge-collapse.md).
+// Regression test: caller-driven edge collapse (tasks/completed/edge-collapse.md).
 //
 // collapseEdges() is the LAST of the four remesh-family edits and the only one
 // that removes degrees of freedom: each accepted collapse merges an edge's two

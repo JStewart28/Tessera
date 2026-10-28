@@ -22,7 +22,7 @@
 //   - a corrupt -> haloExchange -> restored-ghost check on the round-tripped
 //     mesh (same as the distribute/migrate regression tests).
 //
-// A second case (Task 6 of tasks/conforming-refinement.md) round-trips a
+// A second case (Task 6 of tasks/completed/conforming-refinement.md) round-trips a
 // RefinementMode::Conforming mesh after two adaptive refine rounds and checks
 // that un-closing the read-back mesh recovers the RED layer bit-for-bit -- the
 // closure bookkeeping is what makes a conforming file refinable again, and a

@@ -510,7 +510,7 @@ tessera_add_test(
     SOURCES  test_loadbalance.cpp
 )
 
-# Distributed Zoltan2 load-balance solve (tasks/distributed-loadbalance-solve.md):
+# Distributed Zoltan2 load-balance solve (tasks/completed/distributed-loadbalance-solve.md):
 # LoadBalanceMode::{GatherRoot,Distributed,Sampled}. The deliverable is that rank 0
 # receives ZERO faces for its solve in the default Distributed mode (case 6), plus
 # validity/balance/conforming/reproducibility/quality/single-rank/idempotence checks
@@ -609,7 +609,7 @@ tessera_add_test(
 )
 
 # Surface OPERATORS on a conforming mesh (Task 7 of
-# tasks/conforming-refinement.md) -- the payoff test for the whole feature. A
+# tasks/completed/conforming-refinement.md) -- the payoff test for the whole feature. A
 # hanging node's neighbourhood is self-consistent but is a HALF-disc, so every
 # operator assembled over it silently misses the kept face it touches. This
 # identifies the closure vertices (former hanging nodes) from the
@@ -635,7 +635,7 @@ tessera_add_test(
 )
 
 # DETERMINISM of the conforming closure (Task 7 of
-# tasks/conforming-refinement.md). Three senses: (a) rank-count independence,
+# tasks/completed/conforming-refinement.md). Three senses: (a) rank-count independence,
 # against a reference the same run recomputes on MPI_COMM_SELF and compares by
 # quantised POSITION (new gids come from an MPI_Exscan, so nothing gid-keyed is
 # comparable across rank counts) -- this is what pins the blue-diagonal
@@ -661,7 +661,7 @@ tessera_add_test(
 )
 
 # Triangle SHAPE QUALITY over refinement depth (Task 7 of
-# tasks/conforming-refinement.md): the guarantee that justifies making the
+# tasks/completed/conforming-refinement.md): the guarantee that justifies making the
 # closure transient. SIXTEEN adaptive rounds over a shrinking geodesic cap,
 # tracking global min angle, max radius ratio and closure-face fraction per
 # round -- plus each of the four closure patterns separately and the red layer
@@ -693,7 +693,7 @@ tessera_add_test(
 )
 
 # markByQuality() driving CONFORMING refinement (Task 6 of
-# tasks/conforming-refinement.md): the conforming counterpart of the two
+# tasks/completed/conforming-refinement.md): the conforming counterpart of the two
 # markquality tests above. Pins the criteria COMPOSED WITH the closure -- the
 # visible-to-red mask translation, and the fact that CurvatureCriterion's edge
 # coordinator now sees exactly two incident faces where a hanging-node mesh
@@ -715,7 +715,7 @@ tessera_add_test(
 )
 
 # refine() rebuilds the halo itself, so the NAIVE sequence works (follow-up 1 of
-# tasks/halo-rebuild-split-edge-design.md). refine() used to drop every ghost and
+# tasks/completed/halo-rebuild-split-edge-design.md). refine() used to drop every ghost and
 # CLEAR the three halo plans, so haloExchange() silently no-opped on an empty
 # plan and a second refine() threw std::out_of_range from inside Phase 3a's
 # endpoint lookup, on a non-zero rank -- the midpoint owner is the lowest
@@ -743,7 +743,7 @@ tessera_add_test(
     SOURCES  test_refine_rehalo.cpp
 )
 
-# Configurable halo depth (tasks/halo-depth.md). The ghost layer used to be
+# Configurable halo depth (tasks/completed/halo-depth.md). The ghost layer used to be
 # 1-deep and not configurable, so buildVertexStencil(mesh, 2) was SILENTLY SHORT
 # within one hop of a partition boundary -- a short CSR row looks exactly like a
 # correct one, and the resulting operator error moves when the rank count
@@ -771,7 +771,7 @@ tessera_add_test(
     SOURCES  test_halo_depth.cpp
 )
 
-# Caller-driven edge split (tasks/edge-split.md) -- the first operation of the
+# Caller-driven edge split (tasks/completed/edge-split.md) -- the first operation of the
 # REMESH editing family, and the one refine() could not express: refine() takes
 # a FACE mask and bisects all three edges of every marked face, so "bisect these
 # particular edges" was inexpressible. Every count assertion is a closed-form
@@ -787,7 +787,7 @@ tessera_add_test(
 # and the editing-family guard in both directions.
 #
 # TIER regression, ranks 1-5, both backends: gate promotion is pre-authorized
-# for this task by tasks/edge-split.md.
+# for this task by tasks/completed/edge-split.md.
 tessera_add_test(
     NAME     split_edges
     BACKEND  SERIAL
@@ -803,7 +803,7 @@ tessera_add_test(
     SOURCES  test_split_edges.cpp
 )
 
-# Caller-driven EDGE FLIP (tasks/edge-flip.md) -- the second remesh-family
+# Caller-driven EDGE FLIP (tasks/completed/edge-flip.md) -- the second remesh-family
 # operation. A flip changes connectivity only: V, E and F are unchanged and every
 # gid is preserved, so nearly every assertion is an IDENTITY rather than a
 # comparison against a hardcoded number.
@@ -828,7 +828,7 @@ tessera_add_test(
 # floor.
 #
 # TIER regression, ranks 1-5, both backends: gate promotion is pre-authorized
-# for this task by tasks/edge-flip.md.
+# for this task by tasks/completed/edge-flip.md.
 tessera_add_test(
     NAME     flip_edges
     BACKEND  SERIAL
@@ -844,7 +844,7 @@ tessera_add_test(
     SOURCES  test_flip_edges.cpp
 )
 
-# Mesh compaction (tasks/mesh-compaction.md) -- tombstone removal, and the
+# Mesh compaction (tasks/completed/mesh-compaction.md) -- tombstone removal, and the
 # periodic gid renumbering that closes the gid-space leak. The prerequisite of
 # edge collapse: without it a coarsening operation has nowhere to put its dead
 # entities, and would grow its own private half-compaction.
@@ -866,7 +866,7 @@ tessera_add_test(
 # count by one compactAndRenumberGids().
 #
 # TIER regression, ranks 1-5, both backends: gate promotion is pre-authorized
-# for this task by tasks/mesh-compaction.md.
+# for this task by tasks/completed/mesh-compaction.md.
 tessera_add_test(
     NAME     compact
     BACKEND  SERIAL
@@ -882,7 +882,7 @@ tessera_add_test(
     SOURCES  test_compact.cpp
 )
 
-# Caller-driven EDGE COLLAPSE (tasks/edge-collapse.md) -- the FOURTH and last
+# Caller-driven EDGE COLLAPSE (tasks/completed/edge-collapse.md) -- the FOURTH and last
 # remesh-family operation, and the only one that removes degrees of freedom:
 # each accepted collapse merges an edge's two endpoints for V-1, E-3, F-2, so
 # the Euler number is preserved. Without it a remesher is monotone and a long
@@ -917,7 +917,7 @@ tessera_add_test(
 # remesh operations compose, which is the deliverable of the family.
 #
 # TIER regression, ranks 1-5, both backends: gate promotion is pre-authorized
-# for this task by tasks/edge-collapse.md.
+# for this task by tasks/completed/edge-collapse.md.
 tessera_add_test(
     NAME     collapse_edges
     BACKEND  SERIAL
@@ -933,7 +933,7 @@ tessera_add_test(
     SOURCES  test_collapse_edges.cpp
 )
 
-# splitEdges() SHAPE QUALITY OVER SPLIT DEPTH (tasks/edge-split.md, risk R12).
+# splitEdges() SHAPE QUALITY OVER SPLIT DEPTH (tasks/completed/edge-split.md, risk R12).
 # The DIAGNOSTIC behind test_split_edges case 8's floor. Case 8 runs five
 # length-driven rounds; five are consistent with a bound but do not establish
 # one -- test_conforming_quality records that eight rounds could not distinguish
@@ -972,7 +972,7 @@ tessera_add_test(
     SOURCES  test_split_edges_depth.cpp
 )
 
-# Lat/lon (UV) sphere generator (tasks/latlon-sphere.md). generateIcosphere()
+# Lat/lon (UV) sphere generator (tasks/completed/latlon-sphere.md). generateIcosphere()
 # was Tessera's only generator, and an icosphere is TOO GOOD a test surface:
 # nearly isotropic, nearly equilateral, almost every vertex of valence 6. A
 # lat/lon sphere is anisotropic by construction and its two poles have valence
@@ -990,7 +990,7 @@ tessera_add_test(
 # closed-form latitude cut points.
 #
 # TIER regression, ranks 1-5, both backends: gate promotion is pre-authorized
-# for this task by tasks/latlon-sphere.md.
+# for this task by tasks/completed/latlon-sphere.md.
 tessera_add_test(
     NAME     latlon_sphere
     BACKEND  SERIAL
@@ -1006,7 +1006,7 @@ tessera_add_test(
     SOURCES  test_latlon_sphere.cpp
 )
 
-# Ghost scatter-add -- the reverse halo (tasks/halo-scatter-add.md). haloExchange()
+# Ghost scatter-add -- the reverse halo (tasks/completed/halo-scatter-add.md). haloExchange()
 # is a pure gather (owner -> ghost, overwrite); haloScatterAdd() is the missing
 # reverse (ghost -> owner, +=) without which any per-vertex quantity assembled by
 # iterating OWNED faces -- vertex areas, vertex normals, a per-element residual --
@@ -1023,7 +1023,7 @@ tessera_add_test(
 # kind-named edge and face wrappers, the empty single-rank plan, and depth 2.
 #
 # TIER regression, ranks 1-5, both backends: gate promotion is pre-authorized
-# for this task by tasks/halo-scatter-add.md.
+# for this task by tasks/completed/halo-scatter-add.md.
 tessera_add_test(
     NAME     halo_scatter_add
     BACKEND  SERIAL
@@ -1039,7 +1039,7 @@ tessera_add_test(
     SOURCES  test_halo_scatter_add.cpp
 )
 
-# Distributed initial mesh construction (tasks/distributed-coarse-build.md). The
+# Distributed initial mesh construction (tasks/completed/distributed-coarse-build.md). The
 # initial mesh used to be built in FULL ON EVERY RANK before it was cut --
 # buildFromTriangleSoup() is serial and takes a REPLICATED soup, and distribute()
 # can compute ownership locally only *because* the mesh is replicated -- so peak
@@ -1063,7 +1063,7 @@ tessera_add_test(
 # welding two vertices, and the degenerate case where a rank owns zero faces.
 #
 # TIER regression, ranks 1-5, both backends: gate promotion is pre-authorized
-# for this task by tasks/distributed-coarse-build.md.
+# for this task by tasks/completed/distributed-coarse-build.md.
 tessera_add_test(
     NAME     distributed_build
     BACKEND  SERIAL
@@ -1079,7 +1079,7 @@ tessera_add_test(
     SOURCES  test_distributed_build.cpp
 )
 
-# Face->face adjacency through shared edges (tasks/face-adjacency.md). "Which
+# Face->face adjacency through shared edges (tasks/completed/face-adjacency.md). "Which
 # faces share an edge with this face" is not derivable locally: EdgeField::Faces
 # holds GIDS that migrate() carries verbatim and that may name faces this rank
 # does not hold, and a vertex-incidence walk only finds a co-resident neighbour,
@@ -1100,7 +1100,7 @@ tessera_add_test(
 # that must throw naming the EdgeKey, and the generation guard.
 #
 # TIER regression, ranks 1-5, both backends: gate promotion is pre-authorized
-# for this task by tasks/face-adjacency.md.
+# for this task by tasks/completed/face-adjacency.md.
 tessera_add_test(
     NAME     face_adjacency
     BACKEND  SERIAL

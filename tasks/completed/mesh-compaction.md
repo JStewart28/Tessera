@@ -253,7 +253,7 @@ ordering diagram in [halo-depth.md](halo-depth.md).
   | `src/Tessera_Profiling.hpp` | `TIMER_COMPACT`, `TIMER_COMPACT_RENUMBER` added and used. |
   | `tests/test_compact.cpp` | **New**, all eleven checks. |
   | `tests/CMakeLists.txt` | `compact` registered SERIAL + HIP, TIER `regression`, `RANKS ${TESSERA_TEST_MPI_RANKS}`. |
-  | `tasks/halo-depth.md` | `rebuildHalo()` citation corrected 642 → 733. |
+  | `tasks/completed/halo-depth.md` | `rebuildHalo()` citation corrected 642 → 733. |
   | `tessera_compact.flux` | Scratch batch runner, **not for committing**. |
 
   **Decisions, as they were settled and implemented.**

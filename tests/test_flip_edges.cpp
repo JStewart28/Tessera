@@ -9,7 +9,7 @@
  * SPDX-License-Identifier: BSD-3-Clause                                    *
  ****************************************************************************/
 
-// Regression test: caller-driven edge flip (tasks/edge-flip.md).
+// Regression test: caller-driven edge flip (tasks/completed/edge-flip.md).
 //
 // flipEdges() replaces the diagonal of the quad formed by the two faces
 // incident on each marked edge. V, E and F are UNCHANGED and every gid is
@@ -120,7 +120,7 @@ static const long long V0 = 162, E0 = 480, F0 = 320;
 // SCOPE -- READ THIS BEFORE QUOTING THE FLOOR. It is a statement about the
 // DRIVE (a length-threshold split mask plus a valence-improving flip mask), not
 // about either operation. splitEdges() makes no shape guarantee of its own
-// (tasks/edge-split.md Decision 3). flipEdges() guarantees only that no ACCEPTED
+// (tasks/completed/edge-split.md Decision 3). flipEdges() guarantees only that no ACCEPTED
 // flip produces a face below DefaultFlipPolicy::minQuality -- a bound on the
 // faces a flip CREATES, not on the faces the mask never touched, and one that a
 // later splitEdges() round can cut below. NOTE THE FACTOR OF TWO: minQuality is
@@ -578,7 +578,7 @@ static std::map<GlobalId, int> lookup( MeshT& mesh,
 } // namespace valence
 
 //! THE VALENCE-EQUALIZATION MASK -- the intended caller-side pattern, written
-//! out in full because it is what tasks/edge-flip.md Decision 2 says belongs to
+//! out in full because it is what tasks/completed/edge-flip.md Decision 2 says belongs to
 //! the caller rather than to flipEdges().
 //!
 //! A flip of (a,b) with opposite corners (c,d) takes one edge off each of a and

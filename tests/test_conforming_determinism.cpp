@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Regression test: the conforming closure is DETERMINISTIC (Task 7 of
-// tasks/conforming-refinement.md). Three independent senses:
+// tasks/completed/conforming-refinement.md). Three independent senses:
 //
 //   A. RANK-COUNT INDEPENDENCE. The same geometrically-defined refinement of
 //      the same starting mesh must produce the same conforming mesh however
@@ -40,7 +40,7 @@
 //      partition-independent, but gid-valued and so rank-count dependent, since
 //      midpoint gids come from an MPI_Exscan. Measured then: np1-4 agreed and np5
 //      flipped 4 of 20 blue parents, recorded as Decision 11 in
-//      tasks/conforming-refinement.md. Making the geometric rule work needed the
+//      tasks/completed/conforming-refinement.md. Making the geometric rule work needed the
 //      split edge's squared length to travel WITH THE EDGE, in Phase 2's existing
 //      coordinator reply -- it cannot be computed where it is used, because the
 //      closure runs on the un-closed red layer whose corners come from

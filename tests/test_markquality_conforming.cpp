@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Regression test: markByQuality() drives CONFORMING refinement (Task 6 of
-// tasks/conforming-refinement.md). The conforming counterpart of
+// tasks/completed/conforming-refinement.md). The conforming counterpart of
 // markquality_edge / markquality_curv, which pin the criteria themselves
 // against a partition-free reference; this file pins the criteria *composed
 // with* the closure.

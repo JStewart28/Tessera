@@ -16,7 +16,7 @@ Tessera.
 > [docs/design.md](docs/design.md) document the *design* of milestone 1 (a single
 > rising bubble). The API below is the target the
 > implementation is being built against (see `plans/compiled-hopping-torvalds.md`
-> and the `tasks/milestone1_mesh.md` handoff contract). Sections marked *(planned)*
+> and the `tasks/completed/milestone1_mesh.md` handoff contract). Sections marked *(planned)*
 > are not yet implemented.
 
 ---
@@ -451,7 +451,7 @@ Extending the level model to anisotropic bisection (per-edge levels with a
 compatible balance rule) is a much larger design that no known consumer needs; it
 is recorded under *Future Optimizations* below, not attempted. See
 `docs/design.md` → *Edge-addressed splitting* and
-[tasks/edge-split.md](tasks/edge-split.md).
+[tasks/completed/edge-split.md](tasks/completed/edge-split.md).
 
 ### Edge flip
 
@@ -532,7 +532,7 @@ differs from a serial pass and both are valid** — a consumer must compare qual
 *statistics*, not edit sets. `flipEdges()` ends by calling `rebuildHalo()` at the
 halo's recorded depth, so the halo is valid on return. An empty mask is a no-op
 fast path. See `docs/design.md` → *Edge flip* and
-[tasks/edge-flip.md](tasks/edge-flip.md).
+[tasks/completed/edge-flip.md](tasks/completed/edge-flip.md).
 
 ### Edge collapse
 
@@ -674,7 +674,7 @@ a caller never sees a tombstone, and a second `collapseEdges()` may follow
 immediately. An empty mask, **and a call in which every candidate is rejected**,
 are both genuine no-ops: no rewrite, no compaction, and every gid, key and local
 ordering unchanged. See `docs/design.md` → *Edge collapse* and
-[tasks/edge-collapse.md](tasks/edge-collapse.md).
+[tasks/completed/edge-collapse.md](tasks/completed/edge-collapse.md).
 
 ### Compaction: removing entities
 
@@ -1083,7 +1083,7 @@ make -j $(nproc)
   consumer, Beatnik's z-model remesher, is entirely edge-addressed and never calls
   `refine()`). Until then the guard turns the mistake into an immediate abort,
   which is the cheap 95% of the value. Design notes:
-  [tasks/edge-split.md](tasks/edge-split.md) → Decision 1's alternative.
+  [tasks/completed/edge-split.md](tasks/completed/edge-split.md) → Decision 1's alternative.
 
 ---
 
@@ -1197,9 +1197,9 @@ make -j $(nproc)
   chosen **geometrically** (shorter diagonal, i.e. the midpoint of the longer split
   edge joins its opposite corner), so nothing about the closure reads an
   `MPI_Exscan`-derived gid. This closed the last recorded limit of conforming mode.
-  Design: [tasks/conforming-refinement.md](tasks/conforming-refinement.md) and
+  Design: [tasks/completed/conforming-refinement.md](tasks/completed/conforming-refinement.md) and
   `docs/design.md` → *Adaptive refinement*; verification evidence:
-  [tasks/conforming-refinement-debug.md](tasks/conforming-refinement-debug.md).
+  [tasks/completed/conforming-refinement-debug.md](tasks/completed/conforming-refinement-debug.md).
 - **`RefinementMode::HangingNode2to1` does not track hanging nodes across refine
   rounds.** Two consequences, both long-standing and neither visible to that mode's
   own tests (which assert non-conformity anyway), found while fixing the conforming

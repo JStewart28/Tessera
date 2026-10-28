@@ -9,7 +9,7 @@
  * SPDX-License-Identifier: BSD-3-Clause                                    *
  ****************************************************************************/
 
-// Regression test: caller-driven edge split (tasks/edge-split.md).
+// Regression test: caller-driven edge split (tasks/completed/edge-split.md).
 //
 // splitEdges() bisects EXACTLY the marked edges and subdivides every incident
 // face into 2, 3 or 4 children on the bit pattern of its bisected edges. It is

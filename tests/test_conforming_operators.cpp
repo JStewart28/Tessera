@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Regression test: SURFACE OPERATORS on a conforming mesh (Task 7 of
-// tasks/conforming-refinement.md). This is the PAYOFF test -- the reason the
+// tasks/completed/conforming-refinement.md). This is the PAYOFF test -- the reason the
 // consuming codebase needs conforming refinement at all.
 //
 // A hanging node is a vertex `m` that lies on an edge (a,b) of a kept face

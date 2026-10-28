@@ -11,7 +11,7 @@
 ############################################################################
 #
 # Conforming-refinement verification sweep (Task 8 of
-# tasks/conforming-refinement.md).
+# tasks/completed/conforming-refinement.md).
 #
 # Submit: flux batch scripts/tuolumne/run_conforming_tests.flux
 #

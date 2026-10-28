@@ -621,7 +621,7 @@ double minRadiusRatio( MeshT& mesh, int& fails, double& minAngleDeg )
 }
 
 // ---------------------------------------------------------------------------
-// Conforming-refinement invariants (tasks/conforming-refinement.md, Task 4)
+// Conforming-refinement invariants (tasks/completed/conforming-refinement.md, Task 4)
 // ---------------------------------------------------------------------------
 //
 // These are the acceptance criteria for RefinementMode::Conforming. Three of

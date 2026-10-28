@@ -87,7 +87,7 @@ namespace Tessera
 //
 //     (u, x, w)   and   (v, w, x)
 //
-// (tasks/edge-flip.md's "(a,c,d) and (b,d,c)" is the REVERSED pair; see the
+// (tasks/completed/edge-flip.md's "(a,c,d) and (b,d,c)" is the REVERSED pair; see the
 // progress log). The new edge (w,x) is traversed x->w in the first and w->x in
 // the second, so the result is manifold and consistently oriented.
 //

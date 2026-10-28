@@ -693,7 +693,7 @@ child carries its parent's level — so `Level` no longer maps 1:1 to triangle
 size. **None of the conforming path has been executed yet**: it is written,
 registered, and compiles clean on both backends, and it is verified in a single
 pass at the end of the plan. See
-[tasks/conforming-refinement.md](../tasks/conforming-refinement.md), which holds
+[tasks/completed/conforming-refinement.md](../tasks/completed/conforming-refinement.md), which holds
 the full design and the remaining tasks.
 
 ### The red layer (both modes)
@@ -844,7 +844,7 @@ inside `detail::refineImpl()` under `if constexpr`.
    `MPI_COMM_SELF` reference at np1–5 (`blueDiagMismatch=0`). So the residual
    dependence is real in principle and unobserved in practice; the counter is what
    keeps that an ongoing measurement. See Decisions 11 and 15 in
-   `tasks/conforming-refinement.md`.
+   `tasks/completed/conforming-refinement.md`.
 
 The closure creates **no vertices**, so no `MPI_Exscan`, no interpolation, and no
 `RefinePolicy` involvement. The one widened count is the *face*-gid allocation:

@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Regression test: DISTRIBUTED INITIAL MESH CONSTRUCTION
-// (tasks/distributed-coarse-build.md).
+// (tasks/completed/distributed-coarse-build.md).
 //
 // The initial mesh used to be built in FULL ON EVERY RANK before it was cut:
 // buildFromTriangleSoup() is host-side, serial, and takes a replicated soup;

@@ -104,7 +104,7 @@ struct RefineResult
     //! midpoint was assigned here or received from its owner. Sorted and unique
     //! by EdgeKey.
     //!
-    //! Widened in Task 3 of tasks/conforming-refinement.md: before, this held
+    //! Widened in Task 3 of tasks/completed/conforming-refinement.md: before, this held
     //! only the edges of this rank's *refining* faces, which is enough to verify
     //! cross-rank gid agreement but not enough to close a kept face whose
     //! neighbour across a partition boundary refined. It is now the input the
@@ -160,7 +160,7 @@ struct PropMsg
 //! (edge, incident owned-face owner, is-that-face-refining) advertisement for
 //! midpoint ownership. Sent for EVERY owned face's edges, not just refining
 //! ones, so a kept face learns the midpoint gid of an edge a neighbour bisected
-//! (Task 3 of tasks/conforming-refinement.md). The coordinator still derives
+//! (Task 3 of tasks/completed/conforming-refinement.md). The coordinator still derives
 //! ownership from the refining participants alone.
 struct OwnerMsg
 {

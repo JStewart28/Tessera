@@ -44,7 +44,7 @@ namespace Tessera
 //                    triangle similarity classes.
 //
 // See docs/design.md (Adaptive refinement) and
-// tasks/conforming-refinement.md for the full design.
+// tasks/completed/conforming-refinement.md for the full design.
 enum class RefinementMode
 {
     HangingNode2to1, //!< 2:1-bounded hanging nodes; opt-in, cheaper.

@@ -9,7 +9,7 @@
  * SPDX-License-Identifier: BSD-3-Clause                                    *
  ****************************************************************************/
 
-// Regression test: mesh compaction (tasks/mesh-compaction.md).
+// Regression test: mesh compaction (tasks/completed/mesh-compaction.md).
 //
 // compact() removes every tombstoned entity (`Gid == invalid_gid`) and every
 // vertex/edge no surviving face references, restores the owned-first

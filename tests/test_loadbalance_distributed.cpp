@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Regression test: the DISTRIBUTED load-balance solve
-// (tasks/distributed-loadbalance-solve.md).
+// (tasks/completed/distributed-loadbalance-solve.md).
 //
 // computeLoadBalance() used to be rank-0-bound in the GLOBAL face count: it
 // gathered every rank's centroids/weights to rank 0, solved the whole problem

@@ -302,7 +302,7 @@ namespace Tessera
 // FACES only). This is weaker than flipEdges(), which at least rewrites the
 // flipped edge's Faces exactly. Repairing it would cost a round on a field no
 // code path in src/ reads for correctness; making it exact is
-// tasks/face-adjacency.md.
+// tasks/completed/face-adjacency.md.
 //
 // Preconditions: `mesh` is distributed (post-distribute) or replicated
 // (haloDepth() == 0), owned-first, entities carry global gids, the halo is valid
@@ -341,7 +341,7 @@ struct CollapseResult
 
     //! THE COLLAPSED SET: the EdgeKey of every accepted collapse this rank
     //! TOUCHES -- one whose decision it made or whose rewrite it applied.
-    //! Sorted and unique. ADDED beyond the API block in tasks/edge-collapse.md,
+    //! Sorted and unique. ADDED beyond the API block in tasks/completed/edge-collapse.md,
     //! for the same reason SplitResult::midpoints and FlipResult::flipped exist:
     //! without it a caller (and the test) cannot learn the accepted set without
     //! instrumenting the library at the call site.

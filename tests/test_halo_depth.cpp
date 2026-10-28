@@ -9,7 +9,7 @@
  * SPDX-License-Identifier: BSD-3-Clause                                    *
  ****************************************************************************/
 
-// Regression test: CONFIGURABLE HALO DEPTH (tasks/halo-depth.md).
+// Regression test: CONFIGURABLE HALO DEPTH (tasks/completed/halo-depth.md).
 //
 // The ghost layer used to be 1-deep and not configurable, which covers a
 // one-ring stencil exactly and nothing wider. buildVertexStencil( mesh, 2 ) on a

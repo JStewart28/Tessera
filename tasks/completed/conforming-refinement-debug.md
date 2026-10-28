@@ -1,9 +1,9 @@
 # Conforming Refinement — Task 8 debugging
 
 > **This file is self-contained.** A new session can be told *"read
-> `tasks/conforming-refinement-debug.md` and complete the next task"* and needs
+> `tasks/completed/conforming-refinement-debug.md` and complete the next task"* and needs
 > nothing else to start. Background on the feature's design lives in
-> [tasks/conforming-refinement.md](conforming-refinement.md) — read it when a
+> [tasks/completed/conforming-refinement.md](conforming-refinement.md) — read it when a
 > debug task tells you to, not before.
 >
 > **How to work this file.** Tasks are ordered by dependency, D1 first. Do the
@@ -11,7 +11,7 @@
 > its status, record what the fix actually was under *What landed*, append to the
 > *Findings log* at the bottom (append-only), commit, and push. If a fix changes
 > a **design** decision, also rewrite the affected section of
-> `tasks/conforming-refinement.md` — that file is the design's source of truth
+> `tasks/completed/conforming-refinement.md` — that file is the design's source of truth
 > and must never describe something the code no longer does.
 >
 > **Rules inherited from Task 8 (non-negotiable).**
@@ -53,7 +53,7 @@ layer is rank-count dependent up to blue closure diagonals (np1–4 agree, np5 f
 layer, `|S|` histogram, closure-vertex set, V/E/F — is invariant and asserted as
 such, and `conforming_determinism` now asserts the sharper "the visible layer
 differs *only* through blue diagonals". Decision 11 in
-[tasks/conforming-refinement.md](conforming-refinement.md); README *Known Issues*.
+[tasks/completed/conforming-refinement.md](conforming-refinement.md); README *Known Issues*.
 
 D7 answered the last open question: the shape bound **is** fixed in the round count —
 `maxQ` saturates at 2.5254 by round 11 and is flat through round 16 — so
@@ -423,7 +423,7 @@ reconstruction: have the Phase-2 coordinator treat a red edge with a **single**
 incidence as split. It needs the midpoint gid, which only the finer side knows
 and which the local reconstruction already has — so it is probably strictly
 worse. Record whichever you choose, and why, in the *Decision record* of
-`tasks/conforming-refinement.md`.
+`tasks/completed/conforming-refinement.md`.
 
 **Acceptance.** `refine_conforming` passes all three adaptive rounds plus the
 empty-mask and uniform-mask cases, SERIAL, np1. The non-vacuity control must
@@ -431,7 +431,7 @@ still **fail** conformity every round (`control euler` stays negative) — if th
 control starts passing, the fix has made the mask too weak and the test is
 proving nothing.
 
-**Also update.** `tasks/conforming-refinement.md`: rewrite the *Design →
+**Also update.** `tasks/completed/conforming-refinement.md`: rewrite the *Design →
 Distributed algorithm* step 3b description and the *Phase 2 extension*
 paragraph to describe the union, and add a Decision-record entry. Risk point 9
 becomes a resolved finding. **Done.**
@@ -439,7 +439,7 @@ becomes a resolved finding. **Done.**
 **What landed.**
 
 The local reconstruction was the right call and the alternative is strictly worse
-(Decision 8 in `tasks/conforming-refinement.md` records why). But the closure union
+(Decision 8 in `tasks/completed/conforming-refinement.md` records why). But the closure union
 by itself gets round 2 only, and **two further defects had to be fixed for round 3**;
 both were invisible before the union existed, and both are about the *red engine*
 rather than the closure. All three are in the library, none in the tests.
@@ -526,7 +526,7 @@ untouched: `persistentSplit` is always empty there, so `forEachSubEdge()` degrad
 to the old single advertisement and the union is a no-op — its Phase-2a volumes are
 byte-identical (`x6.96 / x5.03 / x10.01 / x16.38`, unchanged from D1).
 
-**Also landed.** `tasks/conforming-refinement.md`: *Persistent split edges* section
+**Also landed.** `tasks/completed/conforming-refinement.md`: *Persistent split edges* section
 under the distributed algorithm, step 0c/1/3/3b in the pseudocode, Decisions 8 and
 9, risk point 9 marked resolved (with the original analysis preserved), and a new
 *Known limit* recording that defects 2 and 3 remain in `HangingNode2to1` mode —
@@ -625,7 +625,7 @@ coordinator, so the coordinator numbers its own distinct keys densely from an
 step 3e already performs for ownership and level. One extra field on `EdgeOwnMsg`,
 no extra message round. Refined edge gids are now dense in `[0, globalEdges)` and
 identical on every rank holding the edge. Recorded as **Decision 10** in
-`tasks/conforming-refinement.md`, and `docs/design.md`'s refine section now
+`tasks/completed/conforming-refinement.md`, and `docs/design.md`'s refine section now
 describes the coordinator as assigning the gids.
 
 **One assertion got stronger, deliberately.** The gid half of `empty-mask` was a
@@ -792,7 +792,7 @@ twice now been the missing re-halo between rounds, not a closure defect.
 
 These exercise the closure composed with redistribution, persistence and
 marking. Their known risk points, from
-`tasks/conforming-refinement.md` → Task 8:
+`tasks/completed/conforming-refinement.md` → Task 8:
 
 - **Risk 3 — face gid collisions across rounds.** Retired parent gids are reused
   by un-close while children are allocated above the global max visible gid.
@@ -820,7 +820,7 @@ ideal, and the actual on-disk size delta for a conforming vs hanging-node file
 **The defect — D1's re-halo defect, third occurrence.** The abort fired *before any
 output*, and the reason is that it was not in either case at all: it was in the
 shared fixture `refinedConformingMesh()`
-([test_conforming_migrate.cpp:198-199](../tests/test_conforming_migrate.cpp#L198-L199)),
+([test_conforming_migrate.cpp:198-199](../../tests/test_conforming_migrate.cpp#L198-L199)),
 which calls `refine()` **twice back-to-back with nothing in between** — the exact
 shape D1 documented and D3 confirmed. `gid2lv.at()` in Phase 3a needs the
 *positions* of both endpoints of every midpoint the rank owns, and across a
@@ -947,7 +947,7 @@ asserted separately. An empty closure-vertex set is a hard failure by design.
    fails after D2, D2 is incomplete.
 2. **Rank-count independence** vs an `MPI_COMM_SELF` reference, compared by
    quantised **position**. Read risk point 10 in
-   `tasks/conforming-refinement.md` before touching this. If it fails *only* on
+   `tasks/completed/conforming-refinement.md` before touching this. If it fails *only* on
    the visible layer while the red layer, the `|S|` histogram, the
    closure-vertex set and V/E/F all agree, and `blueDiagMismatch > 0`, that is
    **not** a bug in the risk-point-2 sense — it is the blue tie-break comparing
@@ -956,7 +956,7 @@ asserted separately. An empty closure-vertex set is a hard failure by design.
    (documenting that the visible layer is rank-count dependent up to blue
    diagonals) or replace the tie-break with a geometric rule. No *gid*-based
    rule can be rank-count stable. Record the decision in
-   `tasks/conforming-refinement.md`'s *Decision record* either way.
+   `tasks/completed/conforming-refinement.md`'s *Decision record* either way.
 3. **Cross-mode equivalence under a uniform mask** — full topology, not counts.
    D0 already showed the uniform-mask closure is inert at np1
    (`|S| hist=[1280,0,0,0]`, `closureChildren=0`), which is a good sign for this
@@ -1088,7 +1088,7 @@ stop and report. Bounds recalibrated from measurement, two new assertions added
 (the red layer's own shape, and saturation itself), and the test **promoted to
 `regression` × {SERIAL, HIP} × ranks 1–5** with explicit user confirmation. **No
 library code changed.** Decision 12 in
-[tasks/conforming-refinement.md](conforming-refinement.md). **Read *What landed*** —
+[tasks/completed/conforming-refinement.md](conforming-refinement.md). **Read *What landed*** —
 the per-pattern instrumentation is what turned "is `maxQ` bounded?" into a
 one-run answer, and it is worth reusing.
 
@@ -1114,7 +1114,7 @@ confirmation of backends and ranks (`CLAUDE.md`).
 
 **If the measured quality is genuinely unbounded with round count, that is a
 design finding, not a tolerance to loosen** — stop, record it in
-`tasks/conforming-refinement.md`, and report it. The whole justification for
+`tasks/completed/conforming-refinement.md`, and report it. The whole justification for
 making the closure transient is that the bound is fixed.
 
 **What landed.**
@@ -1229,13 +1229,13 @@ number that moved since D2 and is *not* a regression.
    before the conforming work; at HEAD `ctest -N -L` reports **140 `regression`
    and 62 `unit` instances**, D7's promotion having moved 10 across) and record
    them in the *Status* section of
-   `tasks/conforming-refinement.md` and in the `CLAUDE.md` task-log row.
+   `tasks/completed/conforming-refinement.md` and in the `CLAUDE.md` task-log row.
 5. Decide the **default flip**. Task 7 flipped `Mesh`'s `Mode` default to
    `Conforming` before anything had run. If conforming cannot be made green,
    revert the default to `HangingNode2to1` (keeping conforming opt-in and fully
    built) and record why in README *Known Issues* and under *Open failures*.
    Reverting is preferable to leaving a broken default.
-6. Fill in Task 8's *Report back* in `tasks/conforming-refinement.md`, including
+6. Fill in Task 8's *Report back* in `tasks/completed/conforming-refinement.md`, including
    its deferred-measurements table, from the run output.
 7. Housekeeping: `tuolumne2150-claude-3638145.core` is an untracked crash dump
    in the repo root from an earlier session — delete it or gitignore `*.core`.
@@ -1298,7 +1298,7 @@ count, with the gate itself going 7 → 14 registrations and 70 → 140 instance
 nine new registrations are `refinement_mode` and `refine_closure` (`unit`), and
 `refine_splitedges`, `refine_conforming`, `conforming_migrate`,
 `conforming_operators`, `conforming_determinism`, `conforming_quality` and
-`markquality_conforming` (`regression`). Recorded in `tasks/conforming-refinement.md`'s
+`markquality_conforming` (`regression`). Recorded in `tasks/completed/conforming-refinement.md`'s
 *Status* section and *Report back*, and in the `CLAUDE.md` task-log row. Worth noting
 the `unit` tier is **not** symmetric across backends — 34 SERIAL + 28 HIP — because
 two of its registrations, `global_reduce` (5 instances) and `staleslice_guard` (1),
@@ -1306,7 +1306,7 @@ are **SERIAL-only**, which is exactly the 6-instance gap. The gate tier *is*
 symmetric, 70 + 70.
 
 **5. The default flip: `Conforming` stays.** Decision 13 in
-`tasks/conforming-refinement.md`. The escape hatch existed for "if conforming cannot
+`tasks/completed/conforming-refinement.md`. The escape hatch existed for "if conforming cannot
 be made green"; conforming is green at 202/202 with *stronger* assertions than the
 hanging-node path had before this work, so its precondition never arose. The two
 accepted limits are recorded in README *Known Issues* rather than being reasons to

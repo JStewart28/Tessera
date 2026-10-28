@@ -10,7 +10,7 @@
  ****************************************************************************/
 
 // Regression test: refine() rebuilds the halo itself, so the NAIVE sequence
-// works (follow-up 1 of tasks/halo-rebuild-split-edge-design.md).
+// works (follow-up 1 of tasks/completed/halo-rebuild-split-edge-design.md).
 //
 // This is the acceptance test for factoring the 1-deep halo rebuild out of
 // migrate() into rebuildHalo(), which refine() now calls. Before that, refine()
