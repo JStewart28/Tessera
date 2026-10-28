@@ -122,8 +122,7 @@ about the harness rather than the code:
   directories must be on a shared filesystem; these runs used
   `/usr/WS2/stewartj/t1_runs`.
 - `flux job wait` returns `Request requires owner credentials` for these jobs.
-  `flux job attach <id>` blocks until exit and `flux job status <id>` then
-  yields the exit code.
+  `flux job status <id>` blocks until exit and yields the exit code.
 - Two `--out` stems differing in their **last** component cannot be compared
   byte-for-byte at all: the `.xmf` embeds the `.h5` basename, so the text
   differs for that reason alone. The determinism probe used `--out runA/mesh`
