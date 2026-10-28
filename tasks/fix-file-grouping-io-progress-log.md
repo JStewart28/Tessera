@@ -320,3 +320,48 @@ series over a stale index. V1 — the masters to open are
 (4 timesteps each, attributes `v_gid`, `f_level`; no `vu0`/`fu0` — those exist
 only in a T2 test master). R1 — the example's masters are a live instance of its
 diagnostic and pass it.
+
+## Index truncation on a new series (between T2 and T3)
+
+**Finding.** `MeshSeries` opened `<masterStem>.xmfindex` with `"a"` on every
+frame, including the first, and never truncated it. The master was unaffected —
+it is rewritten from the object's own in-memory steps — but a rerun into the same
+directory under the same master stem appended its frames after the previous run's.
+Two runs at times `0,1,2,3` left an index reading `0,1,2,3,0,1,2,3`. T4's reopen
+would then either throw on the non-increasing time (restart fails although run 2
+is fine) or, had run 2's times happened to keep increasing, silently stitch run 1's
+frames into the reopened series.
+
+**Decision.** The ordinary constructor means *start a new series*. The first
+`write()` of an object whose step vector is empty opens the index with `"w"`;
+every later frame appends. Alternatives considered and rejected: throwing when an
+index already exists (safest against accidental overwrite, but every routine
+rerun into the same directory then needs a manual delete), and leaving it as a
+documented one-output-directory-per-run rule (a trap that only fires at restart).
+Frame `.h5`/`.xmf` files of the earlier run are deliberately left on disk — the
+series stops listing them, and deleting caller-named files is not the library's
+call.
+
+**Change.** `MeshSeries::appendIndexLine()` takes a `truncate` flag; `write()`
+passes `_steps.empty()` sampled before the push. `tests/test_xdmf_series.cpp`
+plants a two-line stale index before constructing the series and asserts that the
+index afterwards is byte-equal to exactly the three frames' `"<stem> %.17g\n"`
+lines — the first in-repo assertion on the index's contents. Documented in the
+README *Time series* bullets, `docs/design.md` Parallel I/O, and the design's
+*Current state*.
+
+**Verified.** `ctest -L unit -R xdmf_series_SERIAL` passes 3/3 (np1-3), job
+`f3gqBA9TJh99`. With `write()` temporarily passing `false` for `truncate` (the
+pre-change behaviour) the same job fails 3/3, each rank count reporting the new
+index check; that edit is reverted. The build dir needed a re-run of
+`bash ../run_cmake_toulumne.sh` before the target existed, and the ctest target
+is `tessera_test_xdmf_series_SERIAL`. `flux batch --flags=waitable` is refused
+on this instance ("only the instance owner can submit with FLUX_JOB_WAITABLE");
+plain `flux batch` followed by `flux job status <id>` blocks and returns the
+exit code.
+
+**Affects:** T3 — rerunning `mesh_pipeline` with the same `--out` now yields a
+4-line index per master, not an accumulating one, so the `.xmfindex` line-count
+check in T3's exit criterion holds on a reused directory too. T4 — reopen must
+load the steps before any `write()`, which is what keeps the reopened index
+appended rather than truncated; recorded as T4 step 5.

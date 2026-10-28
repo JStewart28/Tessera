@@ -161,6 +161,13 @@ for ( int step = 0; step < nsteps; ++step )
 - The master must sit in the **same directory** as every frame it names, because an
   `.xmf` references its `.h5` by basename. `write()` throws `std::runtime_error` on a
   frame stem in a different directory, and on a non-increasing `time`.
+- Each frame also appends a `"<frameStem> <time>"` line to `<masterStem>.xmfindex`,
+  the series' restart record. **Constructing a `MeshSeries` starts a new series:**
+  its first `write()` replaces any `<masterStem>.xmfindex` already on disk, so
+  rerunning into the same directory under the same master stem discards the
+  previous run's series rather than mixing the two. The previous run's frame
+  `.h5`/`.xmf` files are not deleted — they are simply no longer listed. To keep an
+  earlier series, give the new run a different master stem or directory.
 - In Paraview, only the **temporal** XDMF3 reader (`Xdmf3ReaderT`) walks a temporal
   collection. If the master opens showing a single timestep, check the reader choice
   first: `grep -c '<Time Value=' bubble.xmf` tells you what the file actually holds.

@@ -1796,7 +1796,11 @@ XInclude/XPointer: that is correct for an adaptive mesh and is the path with the
 fewest reader bugs (hoisting shared data into the `<Domain>` is reported to break).
 The XML stays light — every child is ~10 lines referencing HDF5, and heavy data never
 enters it. `MeshSeries` also appends one `"<frameStem> <time>"` line per frame to
-`<masterStem>.xmfindex`, the restart record for reopening an existing series.
+`<masterStem>.xmfindex`, the restart record for reopening an existing series. A
+newly constructed `MeshSeries` starts a new series, so its first `write()` truncates
+any index already on disk; a rerun into the same directory therefore never inherits
+an earlier run's frames, which would otherwise surface at restart as a non-increasing
+time or, worse, as stale frames silently stitched into the series.
 
 In Paraview, only the *temporal* XDMF3 reader (`Xdmf3ReaderT`) walks a temporal
 collection; a master that opens showing one timestep is a reader-selection issue, and

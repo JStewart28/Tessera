@@ -86,6 +86,13 @@ class MeshSeries
     //! `masterStem` names the master file `<masterStem>.xmf` and, with it, the
     //! directory every frame of this series must be written to. Nothing is
     //! written until the first write().
+    //!
+    //! This constructor starts a NEW series: its first write() truncates any
+    //! existing `<masterStem>.xmfindex`, so a rerun into the same directory
+    //! never inherits the previous run's frames in its restart record. (The
+    //! master needs no such step -- it is always rewritten from this object's
+    //! own frames.) Frames of the earlier run that are still on disk are left
+    //! alone and are simply no longer part of the series.
     explicit MeshSeries( std::string masterStem )
         : _masterStem( std::move( masterStem ) )
     {
@@ -131,6 +138,9 @@ class MeshSeries
         // detail::writeMeshH5(), so TIMER_WRITE_MESH still spans the frame.
         XdmfFrame frame = writeMesh( mesh, frameStem, time );
 
+        // The first frame of this object starts the index afresh.
+        const bool firstFrame = _steps.empty();
+
         // Rank-uniform accumulator: numFrames() and the monotonic-time check
         // then mean the same thing on every rank. The cost is a handful of
         // strings and integers per frame replicated everywhere.
@@ -138,7 +148,7 @@ class MeshSeries
 
         if ( mesh.rank() == 0 )
         {
-            appendIndexLine( frameStem, time );
+            appendIndexLine( frameStem, time, firstFrame );
             writeXdmfSeries( _masterStem, _steps );
         }
     }
@@ -154,15 +164,17 @@ class MeshSeries
     //! closed per frame so the line is on disk before write() returns. This is
     //! the restart record a series reopen consumes; it is written now so a run
     //! predating that feature is still restartable. %.17g so the double
-    //! round-trips exactly.
-    void appendIndexLine( const std::string& frameStem, double time ) const
+    //! round-trips exactly. `truncate` (the first frame of a new series)
+    //! replaces any existing index instead of appending to it.
+    void appendIndexLine( const std::string& frameStem, double time,
+                          bool truncate ) const
     {
         const std::string idxname = _masterStem + ".xmfindex";
-        std::FILE* fp = std::fopen( idxname.c_str(), "a" );
+        std::FILE* fp = std::fopen( idxname.c_str(), truncate ? "w" : "a" );
         if ( !fp )
             throw std::runtime_error(
                 "Tessera::MeshSeries::write: cannot open '" + idxname +
-                "' for appending" );
+                ( truncate ? "' for writing" : "' for appending" ) );
         std::fprintf( fp, "%s %.17g\n", frameStem.c_str(), time );
         if ( std::fclose( fp ) != 0 )
             throw std::runtime_error(

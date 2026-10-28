@@ -32,6 +32,9 @@
 //     mode garbles the FIRST scalar in the file), and it is why the mesh here
 //     carries user fields: no other committed test leaves a user-field .xmf on
 //     disk, so the attribute loop had no in-repo coverage before this file,
+//   - <master>.xmfindex holds exactly the three frames' "<stem> <time>" lines,
+//     although a stale index was planted before the first write(): a new
+//     series replaces the index rather than appending to an earlier run's,
 //   - python3's xml.etree parses the master, i.e. it is well-formed XML.
 //     Paraview/pvpython are not installed on this system, so the reader-level
 //     confirmation is V1's, done by hand elsewhere.
@@ -251,6 +254,22 @@ int main( int argc, char* argv[] )
             frameStems.push_back( masterStem + "_frame" +
                                   std::to_string( i ) );
 
+        // A stale index from an "earlier run" into the same directory. A new
+        // MeshSeries must replace it on its first write(), so the restart
+        // record never carries the earlier run's frames.
+        const std::string indexPath = masterStem + ".xmfindex";
+        if ( rank == 0 )
+        {
+            std::FILE* fp = std::fopen( indexPath.c_str(), "w" );
+            if ( fp )
+            {
+                std::fprintf( fp, "%s_stale0 0\n%s_stale1 7\n",
+                              masterStem.c_str(), masterStem.c_str() );
+                std::fclose( fp );
+            }
+        }
+        MPI_Barrier( MPI_COMM_WORLD );
+
         MeshSeries series( masterStem );
         for ( int i = 0; i < 3; ++i )
             series.write( mesh, frameStems[static_cast<std::size_t>( i )],
@@ -382,6 +401,25 @@ int main( int argc, char* argv[] )
                 std::printf( "  FAIL: no <Attribute Name= in the master\n" );
             }
 
+            // The index holds exactly this series' three frames, in order --
+            // the stale lines planted before the first write() are gone.
+            {
+                std::string expect;
+                char line[64];
+                for ( int i = 0; i < 3; ++i )
+                {
+                    std::snprintf( line, sizeof( line ), " %.17g\n", times[i] );
+                    expect += frameStems[static_cast<std::size_t>( i )] + line;
+                }
+                if ( readWholeFile( indexPath ) != expect )
+                {
+                    ++r0fails;
+                    std::printf( "  FAIL: %s does not hold exactly this "
+                                 "series' 3 frames (stale lines kept?)\n",
+                                 indexPath.c_str() );
+                }
+            }
+
             // Well-formed XML, checked by an independent parser.
             const std::string py = findPython3();
             if ( py.empty() )
@@ -483,7 +521,7 @@ int main( int argc, char* argv[] )
         if ( rank == 0 )
         {
             std::remove( masterXmf.c_str() );
-            std::remove( ( masterStem + ".xmfindex" ).c_str() );
+            std::remove( indexPath.c_str() );
             for ( const auto& s : frameStems )
             {
                 std::remove( ( s + ".h5" ).c_str() );

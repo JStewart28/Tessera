@@ -221,7 +221,9 @@ T1, T2 and T3 are done; T4 onward are unbuilt. What exists:
   included from `Tessera.hpp`) — the caller-held handle: `write( mesh, frameStem,
   time )` validates on every rank, calls the public timed `writeMesh()`, appends
   the step on every rank, and on rank 0 appends to `<masterStem>.xmfindex` and
-  rewrites the master. Nothing reads a written frame's metadata back for a
+  rewrites the master. The first `write()` of a newly constructed series opens the
+  index with `"w"`, not `"a"`, so a rerun under the same master stem replaces the
+  earlier run's index instead of appending to it. Nothing reads a written frame's metadata back for a
   restart yet — that is T4, and `MeshSeries` keeps every frame in memory.
 - `tests/test_xdmf_series.cpp`, `unit`/`SERIAL`, ranks `1;2;3` — the first
   in-repo assertions on emitted XDMF text, including the user-field attribute
@@ -461,6 +463,10 @@ mid-series.
    validate against the mesh template here: this constructor takes no mesh.
 4. Rewrite the master immediately from the reconstructed steps, so a reopen that
    succeeds is visible on disk before any new frame is written.
+5. Keep the reopened index. `write()` truncates the index only on the first frame
+   of an object whose step vector is empty; a reopened series starts with its
+   steps loaded, so its next `write()` appends. The exit criterion's byte-identity
+   check on the first two child grids depends on this.
 
 **Exit criterion:** `ctest -L unit -R xdmf_series_SERIAL` passes at np1-3 with an
 added case that writes two frames through one `MeshSeries`, destroys it,
