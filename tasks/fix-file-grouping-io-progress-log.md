@@ -321,7 +321,10 @@ series over a stale index. V1 — the masters to open are
 only in a T2 test master). R1 — the example's masters are a live instance of its
 diagnostic and pass it.
 
-## Index truncation on a new series (between T2 and T3)
+## Index truncation on a new series
+
+Follows T3, whose rerun observation (an 8-line index, times
+`0,1,2,3,0,1,2,3`) this resolves.
 
 **Finding.** `MeshSeries` opened `<masterStem>.xmfindex` with `"a"` on every
 frame, including the first, and never truncated it. The master was unaffected —
@@ -360,8 +363,10 @@ on this instance ("only the instance owner can submit with FLUX_JOB_WAITABLE");
 plain `flux batch` followed by `flux job status <id>` blocks and returns the
 exit code.
 
-**Affects:** T3 — rerunning `mesh_pipeline` with the same `--out` now yields a
-4-line index per master, not an accumulating one, so the `.xmfindex` line-count
-check in T3's exit criterion holds on a reused directory too. T4 — reopen must
+**Affects:** T3 (already DONE) — its **Met.** paragraph now states that a rerun
+replaces the index; the example needed no change. T4 — the open question T3's
+**Affects:** line raised (what a fresh series does to an existing index) is
+answered: it truncates. The fresh-over-stale-index test T3 asked for exists in
+`test_xdmf_series.cpp`, so T4's test need not repeat it. Reopen must
 load the steps before any `write()`, which is what keeps the reopened index
 appended rather than truncated; recorded as T4 step 5.

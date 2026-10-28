@@ -223,11 +223,13 @@ T1, T2 and T3 are done; T4 onward are unbuilt. What exists:
   the step on every rank, and on rank 0 appends to `<masterStem>.xmfindex` and
   rewrites the master. The first `write()` of a newly constructed series opens the
   index with `"w"`, not `"a"`, so a rerun under the same master stem replaces the
-  earlier run's index instead of appending to it. Nothing reads a written frame's metadata back for a
-  restart yet — that is T4, and `MeshSeries` keeps every frame in memory.
+  earlier run's index instead of appending to it. Nothing reads a written frame's
+  metadata back for a restart yet — that is T4, and `MeshSeries` keeps every frame
+  in memory.
 - `tests/test_xdmf_series.cpp`, `unit`/`SERIAL`, ranks `1;2;3` — the first
   in-repo assertions on emitted XDMF text, including the user-field attribute
-  block.
+  block, and on the `.xmfindex`: a stale index planted before the first `write()`
+  is replaced by exactly the series' own frames. It deletes everything it writes.
 - `examples/02_mesh_pipeline` constructs one `MeshSeries` per `run()` call
   ([mesh_pipeline.cpp:165](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L165)),
   master stem `seriesStem()` = `<out>_<tag>_np<size>`, with `frameStem()` built
@@ -393,7 +395,7 @@ rather than only the counts. See
 writes at [lines 155](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L155) and
 [221](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L221), and the
 `frameStem()` helper at [lines 107-114](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L107-L114));
-`README.md` ([line 764](../README.md#L764), the `mesh_pipeline` row);
+`README.md` ([line 771](../README.md#L771), the `mesh_pipeline` row);
 `scripts/tuolumne/run_mesh_pipeline_example.flux` (the header comment, which
 names the file to open in Paraview).
 
@@ -434,8 +436,10 @@ in order, and 4 child grids, each carrying the same `<Attribute Name=` list
 `Format="HDF"` references name 4 distinct `.h5` basenames, all present in the
 master's own directory. Each `.xmfindex` has exactly 4 lines with times
 `0,1,2,3`. `python3 -c "import xml.etree.ElementTree as E; E.parse(...)"` exits 0
-on all three. Re-running with the same `--out` appends to the `.xmfindex` (see
-[the progress log](fix-file-grouping-io-progress-log.md#t3)).
+on all three. A rerun with the same `--out` overwrites the frames, and its first
+`write()` replaces each `.xmfindex` rather than appending to it — the fix for the
+8-line index T3's rerun observed, verified by `tests/test_xdmf_series.cpp` (see
+[the progress log](fix-file-grouping-io-progress-log.md#index-truncation-on-a-new-series)).
 
 ### T4 — Restart: reopen an existing series and keep appending — **NOT STARTED**
 
@@ -483,13 +487,25 @@ index path.
 because it may block: neither `paraview` nor `pvpython` is installed on this
 system, so this needs a machine with a Paraview install and cannot run in CI.
 
-**Do:** open a T2- or T3-produced master `.xmf` in the Paraview GUI. Where the
+**Inputs.** Two masters, because neither alone covers every attribute:
+- T3's example masters,
+  `/usr/WS2/stewartj/t3_runs/run1/mesh_{Serial,Default,OpenMP}_conforming_np4.xmf`
+  (4 timesteps each, attributes `v_gid` and `f_level` only — the example mesh has
+  no user fields). Copy each master together with its 4 `.h5` files, keeping them
+  in one directory.
+- A user-field master for `vu0`/`fu0`: `tests/test_xdmf_series.cpp` writes one
+  (3 timesteps, `v_gid`, `f_level`, `vu0`, `fu0`) but deletes it at exit, so run
+  it with the rank-0 cleanup guard temporarily disabled, as the T2 log describes,
+  and revert that edit afterwards.
+
+**Do:** open each master `.xmf` in the Paraview GUI. Where the
 open dialog offers a reader choice, verify **both** the XDMF3 temporal reader
 (`Xdmf3ReaderT` — the variant that walks a temporal collection; `Xdmf3ReaderS`
 is the single-file/spatial one) and the legacy `XDMFReader` (Xdmf2). For each:
 confirm the Information tab lists N timesteps, the time slider animates through
-all N, the surface renders at every step, and `v_gid` / `f_level` / `vu0` /
-`fu0` are all selectable and change with the step. Record which readers worked,
+all N, the surface renders at every step, and every attribute that master carries
+(`v_gid` / `f_level` on both; `vu0` / `fu0` on the user-field one) is selectable
+and changes with the step. Record which readers worked,
 with versions, in the progress log.
 
 **Exit criterion:** a progress-log entry naming the Paraview version, each
