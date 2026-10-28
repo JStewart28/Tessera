@@ -40,8 +40,16 @@
 #include "Tessera_HDF5Writer.hpp"
 #include "Tessera_Xdmf.hpp"
 
+#include <hdf5.h>
+#include <mpi.h>
+
+#include <cerrno>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -62,7 +70,249 @@ inline std::string xdmfDirname( const std::string& path )
     return pos == std::string::npos ? std::string() : path.substr( 0, pos );
 }
 
+//! A `<frameStem>.h5` opened SERIALLY (H5P_DEFAULT, not MPI-IO) to read back
+//! the root attributes a series reopen needs. Unlike readIntAttr/readU64Attr
+//! in Tessera_IoCommon.hpp, which return 0 for a missing attribute, every
+//! failure here throws, naming the file and the attribute: a frame rebuilt
+//! from a zero Nv would describe an empty grid without complaint.
+class SeriesH5Reader
+{
+  public:
+    explicit SeriesH5Reader( std::string path )
+        : _path( std::move( path ) )
+    {
+        _file = H5Fopen( _path.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT );
+        if ( _file < 0 )
+            throw std::runtime_error( "cannot open frame file '" + _path +
+                                      "'" );
+    }
+    ~SeriesH5Reader() { H5Fclose( _file ); }
+    SeriesH5Reader( const SeriesH5Reader& ) = delete;
+    SeriesH5Reader& operator=( const SeriesH5Reader& ) = delete;
+
+    int readInt( const std::string& name ) const
+    {
+        int value = 0;
+        read( name, H5T_NATIVE_INT, &value );
+        return value;
+    }
+    std::uint64_t readU64( const std::string& name ) const
+    {
+        std::uint64_t value = 0;
+        read( name, H5T_NATIVE_UINT64, &value );
+        return value;
+    }
+
+  private:
+    void read( const std::string& name, hid_t memType, void* out ) const
+    {
+        const hid_t attr = H5Aopen( _file, name.c_str(), H5P_DEFAULT );
+        if ( attr < 0 )
+            throw std::runtime_error( "cannot open root attribute '" + name +
+                                      "' in frame file '" + _path + "'" );
+        const herr_t rc = H5Aread( attr, memType, out );
+        H5Aclose( attr );
+        if ( rc < 0 )
+            throw std::runtime_error( "cannot read root attribute '" + name +
+                                      "' in frame file '" + _path + "'" );
+    }
+
+    std::string _path;
+    hid_t _file = -1;
+};
+
+//! Rebuild the XdmfFrame writeMeshH5() returned for `<frameStem>.h5`, from the
+//! root attributes it wrote. Field datasets and display names follow the
+//! writer: dataset "u<j>", display name "v"/"f" + "u<j>".
+inline XdmfFrame readSeriesFrame( const std::string& frameStem )
+{
+    const SeriesH5Reader h5( frameStem + ".h5" );
+    XdmfFrame f;
+    f.h5name = xdmfBasename( frameStem ) + ".h5";
+    f.dim = h5.readInt( "dim" );
+    f.scalarBytes = h5.readInt( "scalar_bytes" );
+    f.Nv = static_cast<unsigned long long>( h5.readU64( "Nv" ) );
+    f.Nf = static_cast<unsigned long long>( h5.readU64( "Nf" ) );
+    const int nUV = h5.readInt( "n_user_v_fields" );
+    for ( int j = 0; j < nUV; ++j )
+    {
+        const std::string name = "u" + std::to_string( j );
+        f.vFields.push_back(
+            { name, "v" + name, h5.readInt( "uv_ext_" + std::to_string( j ) ) } );
+    }
+    const int nUF = h5.readInt( "n_user_f_fields" );
+    for ( int j = 0; j < nUF; ++j )
+    {
+        const std::string name = "u" + std::to_string( j );
+        f.fFields.push_back(
+            { name, "f" + name, h5.readInt( "uf_ext_" + std::to_string( j ) ) } );
+    }
+    return f;
+}
+
+//! Parse `<masterStem>.xmfindex` and rebuild every step it lists. Serial; the
+//! reopen constructor calls it on one rank. Each line is
+//! "<frameStem> %.17g\n" with the stem written verbatim, so it is split at
+//! its LAST space -- the stem may itself contain spaces. Throws on a missing
+//! or empty index, a line that does not parse (including a final line with no
+//! newline, i.e. a torn append), a non-increasing time, or a frame stem whose
+//! directory differs from the master's. Messages are relative to the index;
+//! the caller prefixes its path.
+inline std::vector<XdmfTimeStep> readSeriesIndex( const std::string& masterStem )
+{
+    const std::string idxname = masterStem + ".xmfindex";
+    std::FILE* fp = std::fopen( idxname.c_str(), "rb" );
+    if ( !fp )
+        throw std::runtime_error( std::string( "cannot open it for reading (" ) +
+                                  std::strerror( errno ) + ")" );
+    std::string text;
+    char buf[4096];
+    std::size_t n;
+    while ( ( n = std::fread( buf, 1, sizeof( buf ), fp ) ) > 0 )
+        text.append( buf, n );
+    const bool readErr = std::ferror( fp ) != 0;
+    std::fclose( fp );
+    if ( readErr )
+        throw std::runtime_error( "error reading it" );
+    if ( text.empty() )
+        throw std::runtime_error( "it is empty, so there is no series to "
+                                  "continue" );
+    if ( text.back() != '\n' )
+        throw std::runtime_error( "its last line has no terminating newline "
+                                  "(a torn append?)" );
+
+    const std::string masterDir = xdmfDirname( masterStem );
+    std::vector<XdmfTimeStep> steps;
+    std::size_t lineNo = 0;
+    for ( std::size_t b = 0; b < text.size(); )
+    {
+        const std::size_t e = text.find( '\n', b );
+        const std::string line = text.substr( b, e - b );
+        b = e + 1;
+        ++lineNo;
+        const std::string where = "line " + std::to_string( lineNo ) + " '" +
+                                  line + "'";
+
+        const std::size_t sp = line.find_last_of( ' ' );
+        if ( sp == std::string::npos || sp == 0 || sp + 1 == line.size() )
+            throw std::runtime_error( where +
+                                      " is not \"<frameStem> <time>\"" );
+        const std::string frameStem = line.substr( 0, sp );
+        const std::string timeText = line.substr( sp + 1 );
+        char* end = nullptr;
+        const double time = std::strtod( timeText.c_str(), &end );
+        if ( end != timeText.c_str() + timeText.size() )
+            throw std::runtime_error( where + ": time '" + timeText +
+                                      "' is not a number" );
+
+        if ( !steps.empty() && !( time > steps.back().time ) )
+            throw std::runtime_error(
+                where + ": time " + timeText +
+                " is not strictly greater than the previous line's" );
+
+        const std::string frameDir = xdmfDirname( frameStem );
+        if ( frameDir != masterDir )
+            throw std::runtime_error(
+                where + ": frame stem '" + frameStem + "' is in directory '" +
+                frameDir + "' but the master '" + masterStem + "' is in '" +
+                masterDir + "'; they must match" );
+
+        steps.push_back( XdmfTimeStep{ readSeriesFrame( frameStem ), time } );
+    }
+    return steps;
+}
+
+// Byte packing for broadcasting rebuilt steps from the reading rank. Every
+// rank is the same build on the same machine, so raw object bytes suffice.
+template <class T>
+inline void packPod( std::string& buf, const T& v )
+{
+    buf.append( reinterpret_cast<const char*>( &v ), sizeof( T ) );
+}
+template <class T>
+inline T unpackPod( const std::string& buf, std::size_t& pos )
+{
+    T v;
+    std::memcpy( &v, buf.data() + pos, sizeof( T ) );
+    pos += sizeof( T );
+    return v;
+}
+inline void packString( std::string& buf, const std::string& s )
+{
+    packPod( buf, static_cast<std::uint64_t>( s.size() ) );
+    buf += s;
+}
+inline std::string unpackString( const std::string& buf, std::size_t& pos )
+{
+    const auto n = static_cast<std::size_t>( unpackPod<std::uint64_t>( buf, pos ) );
+    std::string s = buf.substr( pos, n );
+    pos += n;
+    return s;
+}
+
+inline void packSteps( std::string& buf, const std::vector<XdmfTimeStep>& steps )
+{
+    auto packFields = [&]( const std::vector<XdmfField>& fields )
+    {
+        packPod( buf, static_cast<std::uint64_t>( fields.size() ) );
+        for ( const auto& fld : fields )
+        {
+            packString( buf, fld.dataset );
+            packString( buf, fld.name );
+            packPod( buf, fld.extent );
+        }
+    };
+    packPod( buf, static_cast<std::uint64_t>( steps.size() ) );
+    for ( const auto& s : steps )
+    {
+        packPod( buf, s.time );
+        packString( buf, s.frame.h5name );
+        packPod( buf, s.frame.dim );
+        packPod( buf, s.frame.scalarBytes );
+        packPod( buf, s.frame.Nv );
+        packPod( buf, s.frame.Nf );
+        packFields( s.frame.vFields );
+        packFields( s.frame.fFields );
+    }
+}
+
+inline std::vector<XdmfTimeStep> unpackSteps( const std::string& buf,
+                                              std::size_t pos )
+{
+    auto unpackFields = [&]()
+    {
+        std::vector<XdmfField> fields(
+            static_cast<std::size_t>( unpackPod<std::uint64_t>( buf, pos ) ) );
+        for ( auto& fld : fields )
+        {
+            fld.dataset = unpackString( buf, pos );
+            fld.name = unpackString( buf, pos );
+            fld.extent = unpackPod<int>( buf, pos );
+        }
+        return fields;
+    };
+    std::vector<XdmfTimeStep> steps(
+        static_cast<std::size_t>( unpackPod<std::uint64_t>( buf, pos ) ) );
+    for ( auto& s : steps )
+    {
+        s.time = unpackPod<double>( buf, pos );
+        s.frame.h5name = unpackString( buf, pos );
+        s.frame.dim = unpackPod<int>( buf, pos );
+        s.frame.scalarBytes = unpackPod<int>( buf, pos );
+        s.frame.Nv = unpackPod<unsigned long long>( buf, pos );
+        s.frame.Nf = unpackPod<unsigned long long>( buf, pos );
+        s.frame.vFields = unpackFields();
+        s.frame.fFields = unpackFields();
+    }
+    return steps;
+}
+
 } // namespace detail
+
+//! Tag selecting MeshSeries' reopen constructor.
+struct ReopenSeries
+{
+};
 
 //! A time series of mesh frames sharing one master `.xmf`.
 //!
@@ -79,6 +329,11 @@ inline std::string xdmfDirname( const std::string& path )
 //!   for ( int step = 0; step < nsteps; ++step )
 //!       series.write( mesh, "out/bubble_" + pad( step ), t );  // t increasing
 //!   // open out/bubble.xmf in Paraview: one dataset, nsteps timesteps
+//!
+//!   // After a restart: continue the same series, same master.
+//!   Tessera::MeshSeries resumed( "out/bubble", Tessera::ReopenSeries{},
+//!                                mesh.comm() );
+//!   resumed.write( mesh, "out/bubble_" + pad( nsteps ), t );  // t > last
 //! \endcode
 class MeshSeries
 {
@@ -96,6 +351,61 @@ class MeshSeries
     explicit MeshSeries( std::string masterStem )
         : _masterStem( std::move( masterStem ) )
     {
+    }
+
+    //! Reopen the series recorded in `<masterStem>.xmfindex`, so that the next
+    //! write() continues it: the reopened steps are kept, the index is
+    //! appended to rather than replaced, and the next `time` must exceed the
+    //! last recorded one.
+    //!
+    //! **Collective on `comm`** -- every rank must call it with the same
+    //! `masterStem`, and `comm` should be the communicator of the meshes later
+    //! passed to write(). Rank 0 reads the index and, serially, each listed
+    //! `<frameStem>.h5`'s root attributes to rebuild that frame's XDMF
+    //! metadata, then rewrites `<masterStem>.xmf` from them before returning,
+    //! and broadcasts the steps, so numFrames() is the same on every rank.
+    //!
+    //! Throws std::runtime_error ON EVERY RANK, with the same message naming
+    //! the index, if the index is missing or empty, a line does not parse as
+    //! "<frameStem> <time>", its times are not strictly increasing, a frame
+    //! stem's directory differs from the master's, a listed `.h5` or one of
+    //! its root attributes cannot be read, or the master cannot be rewritten.
+    MeshSeries( std::string masterStem, ReopenSeries, MPI_Comm comm )
+        : _masterStem( std::move( masterStem ) )
+    {
+        int rank = 0;
+        MPI_Comm_rank( comm, &rank );
+
+        // Rank 0 does every read. Its outcome travels as one payload: 'S'
+        // plus the packed steps, or 'E' plus the error text, so a failure
+        // throws on every rank and no rank goes on to a collective write()
+        // the others never reach.
+        std::string payload;
+        if ( rank == 0 )
+        {
+            try
+            {
+                std::vector<XdmfTimeStep> steps =
+                    detail::readSeriesIndex( _masterStem );
+                writeXdmfSeries( _masterStem, steps );
+                payload = "S";
+                detail::packSteps( payload, steps );
+            }
+            catch ( const std::exception& e )
+            {
+                payload = std::string( "ETessera::MeshSeries: cannot reopen "
+                                       "the series in '" ) +
+                          _masterStem + ".xmfindex': " + e.what();
+            }
+        }
+        unsigned long long n = payload.size();
+        MPI_Bcast( &n, 1, MPI_UNSIGNED_LONG_LONG, 0, comm );
+        payload.resize( static_cast<std::size_t>( n ) );
+        MPI_Bcast( payload.data(), static_cast<int>( n ), MPI_CHAR, 0, comm );
+
+        if ( payload[0] != 'S' )
+            throw std::runtime_error( payload.substr( 1 ) );
+        _steps = detail::unpackSteps( payload, 1 );
     }
 
     //! Write one frame of the series: `<frameStem>.h5` + its own
@@ -162,9 +472,8 @@ class MeshSeries
   private:
     //! Append "<frameStem> <time>\n" to <masterStem>.xmfindex, opened and
     //! closed per frame so the line is on disk before write() returns. This is
-    //! the restart record a series reopen consumes; it is written now so a run
-    //! predating that feature is still restartable. %.17g so the double
-    //! round-trips exactly. `truncate` (the first frame of a new series)
+    //! the restart record the ReopenSeries constructor consumes. %.17g so the
+    //! double round-trips exactly. `truncate` (the first frame of a new series)
     //! replaces any existing index instead of appending to it.
     void appendIndexLine( const std::string& frameStem, double time,
                           bool truncate ) const

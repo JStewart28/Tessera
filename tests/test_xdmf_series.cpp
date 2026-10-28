@@ -47,6 +47,17 @@
 // std::runtime_error and leave the already-written master BYTE-unchanged: the
 // checks run before any I/O, on every rank, so the throw is symmetric.
 //
+// Restart (T4): a second series writes two frames through one MeshSeries,
+// destroys it, reopens it with the ReopenSeries constructor on MPI_COMM_WORLD
+// and writes a third. numFrames() is asserted on EVERY rank (2 after the
+// reopen, 3 after the write); on rank 0 the master rewritten by the reopen is
+// byte-identical to the one the first object left, and after the third frame
+// it holds three increasing <Time Value= whose first two child grids are
+// byte-identical to the first object's, with the index appended rather than
+// replaced. Failure direction: reopening with the index's two time lines
+// swapped into decreasing order, and with the index deleted, must each throw
+// std::runtime_error naming the index path on every rank.
+//
 // SERIAL, np1-3: the master is rank-0 text with no device involvement.
 
 #include <Tessera.hpp>
@@ -146,6 +157,26 @@ static std::vector<std::string> childGrids( const std::string& master )
         const std::size_t end =
             ( i + 1 < starts.size() ) ? starts[i + 1] : master.size();
         out.push_back( master.substr( starts[i], end - starts[i] ) );
+    }
+    return out;
+}
+
+//! Each child `<Grid ... GridType="Uniform">` of the master, from its opening
+//! tag through its own `</Grid>` -- a child has no nested grid -- so a child
+//! compares equal across masters with different numbers of children.
+static std::vector<std::string> childGridBodies( const std::string& master )
+{
+    const std::string open = "<Grid Name=\"Tessera\" GridType=\"Uniform\">";
+    const std::string close = "</Grid>";
+    std::vector<std::string> out;
+    std::size_t pos = 0;
+    while ( ( pos = master.find( open, pos ) ) != std::string::npos )
+    {
+        const std::size_t end = master.find( close, pos );
+        if ( end == std::string::npos )
+            break;
+        out.push_back( master.substr( pos, end + close.size() - pos ) );
+        pos = end + close.size();
     }
     return out;
 }
@@ -504,6 +535,154 @@ int main( int argc, char* argv[] )
             }
         }
 
+        // ---- Restart: reopen the series and keep appending ------------------
+        const std::string rStem = masterStem + "_reopen";
+        const std::string rXmf = rStem + ".xmf";
+        const std::string rIndex = rStem + ".xmfindex";
+        std::vector<std::string> rFrames;
+        for ( int i = 0; i < 3; ++i )
+            rFrames.push_back( rStem + "_frame" + std::to_string( i ) );
+
+        MPI_Barrier( MPI_COMM_WORLD );
+        {
+            MeshSeries first( rStem );
+            first.write( mesh, rFrames[0], times[0] );
+            first.write( mesh, rFrames[1], times[1] );
+        }
+        MPI_Barrier( MPI_COMM_WORLD );
+        std::string rText2;
+        if ( rank == 0 )
+            rText2 = readWholeFile( rXmf );
+        MPI_Barrier( MPI_COMM_WORLD );
+        {
+            MeshSeries reopened( rStem, ReopenSeries{}, MPI_COMM_WORLD );
+            if ( reopened.numFrames() != 2 )
+            {
+                ++fails;
+                std::printf( "  FAIL: rank %d: reopened numFrames() = %zu, "
+                             "expected 2\n",
+                             rank, reopened.numFrames() );
+            }
+            if ( rank == 0 && readWholeFile( rXmf ) != rText2 )
+            {
+                ++r0fails;
+                std::printf( "  FAIL: master rewritten by the reopen differs "
+                             "from the one the first series wrote\n" );
+            }
+            reopened.write( mesh, rFrames[2], times[2] );
+            if ( reopened.numFrames() != 3 )
+            {
+                ++fails;
+                std::printf( "  FAIL: rank %d: numFrames() after the write "
+                             "= %zu, expected 3\n",
+                             rank, reopened.numFrames() );
+            }
+        }
+        MPI_Barrier( MPI_COMM_WORLD );
+        if ( rank == 0 )
+        {
+            const std::string rText3 = readWholeFile( rXmf );
+            const auto timeVals = extractValues( rText3, "<Time Value=\"" );
+            if ( timeVals.size() != 3 )
+            {
+                ++r0fails;
+                std::printf( "  FAIL: reopened master has %zu <Time Value=, "
+                             "expected 3\n",
+                             timeVals.size() );
+            }
+            for ( std::size_t i = 0; i < timeVals.size(); ++i )
+            {
+                const double v = std::strtod( timeVals[i].c_str(), nullptr );
+                const double prev =
+                    i == 0 ? 0.0
+                           : std::strtod( timeVals[i - 1].c_str(), nullptr );
+                if ( ( i > 0 && !( v > prev ) ) || ( i < 3 && v != times[i] ) )
+                {
+                    ++r0fails;
+                    std::printf( "  FAIL: reopened master <Time Value=\"%s\"> "
+                                 "at step %zu is out of order or wrong\n",
+                                 timeVals[i].c_str(), i );
+                }
+            }
+            const auto before = childGridBodies( rText2 );
+            const auto after = childGridBodies( rText3 );
+            if ( before.size() != 2 || after.size() != 3 )
+            {
+                ++r0fails;
+                std::printf( "  FAIL: %zu child grids before the reopen and "
+                             "%zu after, expected 2 and 3\n",
+                             before.size(), after.size() );
+            }
+            for ( std::size_t i = 0; i < before.size() && i < after.size(); ++i )
+                if ( before[i] != after[i] )
+                {
+                    ++r0fails;
+                    std::printf( "  FAIL: child grid %zu of the reopened master "
+                                 "is not byte-identical to the first "
+                                 "series'\n",
+                                 i );
+                }
+
+            // Appended, not replaced: all three frames, in order.
+            std::string expect;
+            char line[64];
+            for ( int i = 0; i < 3; ++i )
+            {
+                std::snprintf( line, sizeof( line ), " %.17g\n", times[i] );
+                expect += rFrames[static_cast<std::size_t>( i )] + line;
+            }
+            if ( readWholeFile( rIndex ) != expect )
+            {
+                ++r0fails;
+                std::printf( "  FAIL: %s does not hold all 3 frames after the "
+                             "reopen\n",
+                             rIndex.c_str() );
+            }
+        }
+
+        // Failure direction: each bad index must throw, on EVERY rank, with a
+        // message naming the index.
+        auto expectReopenThrows = [&]( const char* what )
+        {
+            MPI_Barrier( MPI_COMM_WORLD );
+            bool named = false, threw = false;
+            try
+            {
+                MeshSeries bad( rStem, ReopenSeries{}, MPI_COMM_WORLD );
+            }
+            catch ( const std::runtime_error& e )
+            {
+                threw = true;
+                named = std::string( e.what() ).find( rIndex ) !=
+                        std::string::npos;
+                if ( rank == 0 )
+                    std::printf( "  (%s) threw: %s\n", what, e.what() );
+            }
+            if ( !threw || !named )
+            {
+                ++fails;
+                std::printf( "  FAIL: rank %d: reopen with %s %s\n", rank,
+                             what,
+                             threw ? "threw without naming the index"
+                                   : "did not throw" );
+            }
+        };
+        if ( rank == 0 )
+        {
+            // The first two lines, swapped into decreasing time order.
+            std::FILE* fp = std::fopen( rIndex.c_str(), "w" );
+            if ( fp )
+            {
+                std::fprintf( fp, "%s %.17g\n%s %.17g\n", rFrames[1].c_str(),
+                              times[1], rFrames[0].c_str(), times[0] );
+                std::fclose( fp );
+            }
+        }
+        expectReopenThrows( "the index's time lines swapped" );
+        if ( rank == 0 )
+            std::remove( rIndex.c_str() );
+        expectReopenThrows( "the index deleted" );
+
         // r0fails is nonzero only on rank 0; the single Allreduce below folds
         // it in along with every rank's own count.
         fails += r0fails;
@@ -516,13 +695,21 @@ int main( int argc, char* argv[] )
             std::printf( "  [Serial] xdmf series master %s (fails=%d)\n",
                          fails == 0 ? "ok" : "FAIL", fails );
 
-        // Clean up: master, index, and every frame's .h5 + sidecar.
+        // Clean up: both masters, both indexes, and every frame's .h5 +
+        // sidecar.
         MPI_Barrier( MPI_COMM_WORLD );
         if ( rank == 0 )
         {
             std::remove( masterXmf.c_str() );
             std::remove( indexPath.c_str() );
             for ( const auto& s : frameStems )
+            {
+                std::remove( ( s + ".h5" ).c_str() );
+                std::remove( ( s + ".xmf" ).c_str() );
+            }
+            std::remove( rXmf.c_str() );
+            std::remove( rIndex.c_str() );
+            for ( const auto& s : rFrames )
             {
                 std::remove( ( s + ".h5" ).c_str() );
                 std::remove( ( s + ".xmf" ).c_str() );
