@@ -181,7 +181,7 @@ stem whose directory differs from the master's.
 
 ## Current state
 
-T1 and T2 are done; T3 onward are unbuilt. What exists:
+T1, T2 and T3 are done; T4 onward are unbuilt. What exists:
 
 - `Tessera::XdmfField` ([src/Tessera_Xdmf.hpp:32](../src/Tessera_Xdmf.hpp#L32))
   and `Tessera::XdmfFrame` ([:43](../src/Tessera_Xdmf.hpp#L43)), the latter
@@ -226,11 +226,14 @@ T1 and T2 are done; T3 onward are unbuilt. What exists:
 - `tests/test_xdmf_series.cpp`, `unit`/`SERIAL`, ranks `1;2;3` — the first
   in-repo assertions on emitted XDMF text, including the user-field attribute
   block.
-- `examples/02_mesh_pipeline` writes N independent frames
-  ([mesh_pipeline.cpp:155](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L155),
-  [mesh_pipeline.cpp:221](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L221)) —
-  it reproduces the reported symptom exactly and is the natural demonstration
-  vehicle.
+- `examples/02_mesh_pipeline` constructs one `MeshSeries` per `run()` call
+  ([mesh_pipeline.cpp:165](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L165)),
+  master stem `seriesStem()` = `<out>_<tag>_np<size>`, with `frameStem()` built
+  from it plus `_frame<i>`
+  ([mesh_pipeline.cpp:107-122](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L107-L122)).
+  Each execution space therefore writes one master `.xmf` with one timestep per
+  frame, time = frame index, plus its `.xmfindex` and the per-frame
+  `.h5`/`.xmf`. It is the largest in-repo producer of masters for V1 to open.
 - `tests/test_io.cpp` exercises the round trip and deletes `<stem>.xmf`
   ([test_io.cpp:294-295](../tests/test_io.cpp#L294-L295),
   [test_io.cpp:523-524](../tests/test_io.cpp#L523-L524)) but asserts nothing
@@ -380,7 +383,7 @@ is reverted), confirming the collection shape and the user-field attribute block
 rather than only the counts. See
 [the progress log](fix-file-grouping-io-progress-log.md#t2).
 
-### T3 — `mesh_pipeline` writes a series, so the reported symptom is gone from the shipped example — **NOT STARTED**
+### T3 — `mesh_pipeline` writes a series, so the reported symptom is gone from the shipped example — **DONE**
 
 **Depends on:** T2
 
@@ -388,7 +391,9 @@ rather than only the counts. See
 writes at [lines 155](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L155) and
 [221](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L221), and the
 `frameStem()` helper at [lines 107-114](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L107-L114));
-`README.md` ([line 572](../README.md#L572), the `mesh_pipeline` row).
+`README.md` ([line 764](../README.md#L764), the `mesh_pipeline` row);
+`scripts/tuolumne/run_mesh_pipeline_example.flux` (the header comment, which
+names the file to open in Paraview).
 
 **Do:**
 1. Construct one `MeshSeries` per `run()` invocation, master stem
@@ -408,9 +413,27 @@ writes at [lines 155](../examples/02_mesh_pipeline/mesh_pipeline.cpp#L155) and
 see [docs/compile-and-run.md](../docs/compile-and-run.md)) with `--iters 3` produces
 exactly one `<out>_<tag>_np<size>.xmf` per execution-space tag, each containing 4
 `<Time Value=` entries (frame 0 plus 3 iterations) with values `0,1,2,3`, and the
-run exits 0. Failure direction: an `.xmf` naming an `.h5` that does not exist on
-disk must be absent — assert every `Format="HDF"` reference in the master
-resolves to an existing file in the master's directory.
+run exits 0. The `<Attribute Name=` set is identical across each master's child
+grids (R1), and each master has a `<out>_<tag>_np<size>.xmfindex` beside it with
+exactly 4 lines whose times are `0,1,2,3`. Failure direction: an `.xmf` naming an
+`.h5` that does not exist on disk must be absent — assert every `Format="HDF"`
+reference in the master resolves to an existing file in the master's directory.
+
+**Met.** Job `f3gprsqZkFZH` (pdebug, 4 ranks, the committed binding
+`--ntasks 4 --nodes=1 --exclusive --cores-per-task=16`) exits 0 at commit
+`c4fed74`, spack env `~/spack_envs/tuolumne_trilinos/`, run with `--iters 3
+--out /usr/WS2/stewartj/t3_runs/run1/mesh` in a fresh, empty directory. The run
+printed three tags — `Serial_conforming`, `Default_conforming` (HIP) and
+`OpenMP_conforming` — and the directory holds exactly the three matching masters,
+`mesh_{Serial,Default,OpenMP}_conforming_np4.xmf`, beside 4 frames of
+`.h5`/`.xmf` each. Every master has exactly 4 `<Time Value=` entries, `0,1,2,3`
+in order, and 4 child grids, each carrying the same `<Attribute Name=` list
+(`v_gid`, `f_level` — the example's mesh has no user fields). Each master's 16
+`Format="HDF"` references name 4 distinct `.h5` basenames, all present in the
+master's own directory. Each `.xmfindex` has exactly 4 lines with times
+`0,1,2,3`. `python3 -c "import xml.etree.ElementTree as E; E.parse(...)"` exits 0
+on all three. Re-running with the same `--out` appends to the `.xmfindex` (see
+[the progress log](fix-file-grouping-io-progress-log.md#t3)).
 
 ### T4 — Restart: reopen an existing series and keep appending — **NOT STARTED**
 

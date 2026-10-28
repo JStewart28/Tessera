@@ -246,3 +246,77 @@ judge. The master's timestep count for R2's distinguishing measurement is
 the number of frames written. R1 — its stated diagnostic (identical
 `<Attribute Name=` set, same order, across children) is now a committed
 assertion, so a drift would be caught in CI rather than in Paraview.
+
+## T3
+
+Run at commit `c4fed74` (the example and flux-runner change, committed before
+the run so the SHA the job echoes is the code that ran); spack env
+`~/spack_envs/tuolumne_trilinos/`. Verification job `f3gprsqZkFZH` in the fresh
+directory `/usr/WS2/stewartj/t3_runs/run1`; jobs `f3gpsNLM7bDq` then
+`f3gpscSfKB19`, both into the same fresh `/usr/WS2/stewartj/t3_runs/run2` with
+the same `--out`, to observe the rerun behaviour below. All three exit 0. No
+library source changed; only `mesh_pipeline` was built and run, no ctest.
+
+**Decisions taken as given** (handed down with the task):
+
+- **Master stem is `opt.outStem + "_" + tag + "_np" + std::to_string(size)`**
+  — `frameStem()` without `_frame<i>`, so it carries both the execution space
+  and the refine mode. It lives in a new `seriesStem()` helper and `frameStem()`
+  is `seriesStem() + "_frame<i>"`, so the string is built once and the frames
+  sit in the master's directory by construction (R5).
+- **One `MeshSeries` per `run()` call**, constructed just before frame 0. Each
+  mesh type and execution space gets its own series — R1's structural
+  guarantee.
+- **Time is the frame index as a `double`**: `0.0` for frame 0, `double( it )`
+  for iteration `it`, said so in a comment at both call sites.
+
+**Implementation.** Both `writeMesh()` calls became `series.write( mesh,
+frameStem( ... ), time )`; the per-frame `printf` lines are unchanged and one
+rank-0 line at the end of `run()` names the master (`[<tag>] series: 4 frames
+-> open <stem>.xmf in Paraview`). The flux runner's header now says the example
+writes a `MeshSeries` and names the master as the file to open; it also echoes
+`git rev-parse HEAD` and `spack env status` before the `flux run`, so job output
+carries its own provenance. No departure from the **Do** steps.
+
+**Measured.** Three tags ran (`Serial_conforming`, `Default_conforming` = HIP,
+`OpenMP_conforming`) and produced exactly three masters, each with 4 child grids,
+`<Time Value=` `0,1,2,3`, attributes `v_gid`, `f_level` on every child (the
+example mesh has no user fields, so this is a smaller R1 check than T2's), 16
+`Format="HDF"` references to 4 distinct `.h5` basenames all present, a 4-line
+`.xmfindex` with times `0,1,2,3`, and `xml.etree` parses each. Per-frame owned
+counts are identical across the three spaces (rank 0: `ownedF` 80 → 145 → 189 →
+319). The output directory holds 10 files per series: 4 `.h5`, 4 sidecar `.xmf`,
+the master and its index.
+
+**Bugs only running revealed: none in the code.** Three harness facts:
+
+- `flux batch --flags=waitable` is refused here: `only the instance owner can
+  submit with FLUX_JOB_WAITABLE`. Plain `flux batch` then `flux job status
+  <id>` blocks to completion and returns the exit code, which is all that was
+  needed.
+- A fresh checkout's configure must run with the spack env **activated**
+  (`spack env activate ~/spack_envs/tuolumne_trilinos/` inside the same
+  `bash -lc`), not only with `SPACK_USER_CONFIG_PATH` exported:
+  `run_cmake_toulumne.sh` does not activate it and `find_package(Kokkos)` fails
+  at `CMakeLists.txt:50`. Re-running configure in the same build dir after
+  activating succeeds; the failed cache needs no clearing.
+- The example's build warns `-Wnontrivial-memcall` at
+  `src/Tessera_HaloRebuild.hpp:99`; pre-existing, untouched.
+
+**Observed: a rerun with the same `--out` appends to the index.** After two
+runs into `run2`, each master is correct — 4 timesteps, `0,1,2,3`, since it is
+rewritten from the in-memory steps — and every frame `.h5`/`.xmf` is simply
+overwritten. But each `.xmfindex` has **8** lines, times `0,1,2,3,0,1,2,3`:
+a fresh `MeshSeries` opens it with `"a"` and never truncates. Not fixed here.
+
+**Affects:** T4 — an `.xmfindex` can legitimately hold more than one run's
+frames: a rerun into the same stem leaves `0,1,2,3,0,1,2,3`, which the reopen
+constructor's strictly-increasing check (step 2) would reject with a throw even
+though the master on disk is valid. T4's restart design must decide what a
+fresh (non-reopen) `MeshSeries` does to an existing index — truncate it on the
+first `write()` is the obvious candidate — and its test should cover a fresh
+series over a stale index. V1 — the masters to open are
+`/usr/WS2/stewartj/t3_runs/run1/mesh_{Serial,Default,OpenMP}_conforming_np4.xmf`
+(4 timesteps each, attributes `v_gid`, `f_level`; no `vu0`/`fu0` — those exist
+only in a T2 test master). R1 — the example's masters are a live instance of its
+diagnostic and pass it.
