@@ -66,6 +66,12 @@
 //      rounds of valence flips, five times over. Euler == 2 and conformity
 //      after every operation, and the minimum radius ratio stays above a floor
 //      MEASURED in the first implementation run (see kMinRadiusRatioFloor).
+//  13. THE QUALITY HOOK. A flat-topped hexagonal bipyramid, one spoke marked,
+//      and minQuality = kHookThreshold, which falls between the two new faces'
+//      worst radius ratio and their worst mean ratio 4*sqrt(3)*area / sum(l^2).
+//      The default policy rejects the flip as rejectedGeometric; a policy
+//      deriving from it and shadowing quality() with the mean ratio accepts it,
+//      on the same mesh and the same mask.
 //
 // Runs on host (Serial) and device (default, HIP), ranks 1-5.
 
@@ -1090,6 +1096,174 @@ static int caseGeometricRejection( int rank, const char* tag )
     return glob == 0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// Case 13's fixture: a FLAT-TOPPED HEXAGONAL BIPYRAMID.
+// ---------------------------------------------------------------------------
+//
+// A unit hexagonal ring at z = 0, the top apex 0 at z = 0.1 and the bottom apex
+// 1 at z = -1; ring vertex i is gid 2 + i. Flipping the spoke (0,2) replaces the
+// two top faces on it with the shallow top face (0,7,3) and the ring triangle
+// (2,3,7), whose 120-degree corner makes it an obtuse CAP -- the shape on which
+// the radius ratio falls well below the mean ratio. Computed from these
+// coordinates with the library's formulas, and printed by the case at full
+// precision:
+//
+//   worst radius ratio  0.46410161513775444   (detail::flipRadiusRatio)
+//   worst mean ratio    0.59999999999999987   (4*sqrt(3)*area / sum(l^2))
+//   normal deviations   0.0977 and 0.0997 rad, under maxNormalDeviation = 0.35
+//
+// Both worsts are the ring triangle's. (3,7) is not an edge, so the duplicate
+// test passes and the geometric test alone decides.
+static const double kHookThreshold = 0.55;
+
+static TriangleSoup<double> flatBipyramidSoup( EdgeKey& flipMe )
+{
+    const int n = 6;
+    TriangleSoup<double> soup;
+    auto push = [&]( double x, double y, double z )
+    {
+        soup.positions.push_back( x );
+        soup.positions.push_back( y );
+        soup.positions.push_back( z );
+    };
+    push( 0.0, 0.0, 0.1 );
+    push( 0.0, 0.0, -1.0 );
+    for ( int i = 0; i < n; ++i )
+    {
+        const double a = 2.0 * 3.14159265358979323846 * i / n;
+        push( std::cos( a ), std::sin( a ), 0.0 );
+    }
+    for ( int i = 0; i < n; ++i )
+    {
+        // Top faces CCW seen from above, bottom faces the other way, so the
+        // surface is consistently oriented.
+        const int r0 = 2 + i, r1 = 2 + ( i + 1 ) % n;
+        const int top[3] = { 0, r0, r1 };
+        const int bot[3] = { 1, r1, r0 };
+        for ( int k = 0; k < 3; ++k )
+            soup.triangles.push_back( top[k] );
+        for ( int k = 0; k < 3; ++k )
+            soup.triangles.push_back( bot[k] );
+    }
+    flipMe = makeEdgeKey( static_cast<GlobalId>( 0 ),
+                          static_cast<GlobalId>( 2 ) );
+    return soup;
+}
+
+//! The mean ratio 4*sqrt(3)*area / (sum of squared sides): 1 for an equilateral
+//! triangle, 0 for a degenerate one. Not monotone in the radius ratio, which is
+//! what lets one threshold separate the two.
+static inline double meanRatio( const double* p0, const double* p1,
+                                const double* p2 )
+{
+    const double* p[3] = { p0, p1, p2 };
+    double n[3], l2 = 0.0;
+    for ( int k = 0; k < 3; ++k )
+        for ( int d = 0; d < 3; ++d )
+        {
+            const double dd = p[( k + 1 ) % 3][d] - p[k][d];
+            l2 += dd * dd;
+        }
+    const double u[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+    const double v[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+    n[0] = u[1] * v[2] - u[2] * v[1];
+    n[1] = u[2] * v[0] - u[0] * v[2];
+    n[2] = u[0] * v[1] - u[1] * v[0];
+    const double area =
+        0.5 * std::sqrt( n[0] * n[0] + n[1] * n[1] + n[2] * n[2] );
+    if ( !( l2 > 0.0 ) )
+        return 0.0;
+    return 4.0 * std::sqrt( 3.0 ) * area / l2;
+}
+
+//! The default policy with only its quality metric replaced -- the shape a
+//! consumer's policy takes.
+struct MeanRatioFlipPolicy : DefaultFlipPolicy
+{
+    double quality( const double* p0, const double* p1, const double* p2 ) const
+    {
+        return meanRatio( p0, p1, p2 );
+    }
+};
+
+template <class MeshT, class Exec, class Policy>
+static FlipResult hookFlip( const TriangleSoup<double>& soup, const EdgeKey& k,
+                            const Policy& policy, int& local )
+{
+    using mem = typename Exec::memory_space;
+    MeshT mesh( MPI_COMM_WORLD );
+    MeshHalo<mem> halo;
+    buildFromTriangleSoup( mesh, soup );
+    auto faceOwner = facePartitionByAxis( mesh );
+    distribute( mesh, halo, faceOwner );
+    long long V, E, F;
+    counts( mesh, V, E, F );
+    if ( V != 8 || E != 18 || F != 12 )
+        ++local; // fixture drifted
+    const FlipResult res =
+        flipEdges( mesh, halo, maskFromKeys( mesh, { k } ), policy );
+    local += checkAll( mesh, V, E, F );
+    local += checkCountersPartition( res );
+    if ( res.requested != 1 )
+        ++local; // the spoke was not found
+    if ( res.rejectedBoundary != 0 || res.rejectedDuplicateEdge != 0 )
+        ++local; // only the geometric test may decide
+    local += TesseraTest::checkKeyTables( mesh );
+    return res;
+}
+
+//! Case 13: the policy's quality() is the metric minQuality thresholds.
+template <class MeshT, class Exec>
+static int caseQualityHook( int rank, const char* tag )
+{
+    EdgeKey k;
+    const TriangleSoup<double> soup = flatBipyramidSoup( k );
+    int local = 0;
+
+    // THE PREMISE, from the soup: the new faces (lo,x,w) = (0,7,3) and
+    // (hi,w,x) = (2,3,7). Their worst mean ratio clears kHookThreshold and
+    // their worst radius ratio does not.
+    double worstRR = 1e300, worstMR = 1e300;
+    {
+        const double* P = soup.positions.data();
+        const int nf[2][3] = { { 0, 7, 3 }, { 2, 3, 7 } };
+        for ( const auto& f : nf )
+        {
+            const double* q0 = P + 3 * f[0];
+            const double* q1 = P + 3 * f[1];
+            const double* q2 = P + 3 * f[2];
+            worstRR = std::min(
+                worstRR, Tessera::detail::flipRadiusRatio( q0, q1, q2 ) );
+            worstMR = std::min( worstMR, meanRatio( q0, q1, q2 ) );
+        }
+    }
+    if ( !( worstMR >= kHookThreshold && worstRR < kHookThreshold ) )
+        ++local; // the fixture no longer separates the two metrics
+
+    DefaultFlipPolicy def;
+    def.minQuality = kHookThreshold;
+    MeanRatioFlipPolicy mr;
+    mr.minQuality = kHookThreshold;
+
+    const FlipResult rd = hookFlip<MeshT, Exec>( soup, k, def, local );
+    if ( rd.accepted != 0 || rd.rejectedGeometric != 1 )
+        ++local; // the default radius ratio fails the threshold
+    const FlipResult rm = hookFlip<MeshT, Exec>( soup, k, mr, local );
+    if ( rm.accepted != 1 || rm.rejectedGeometric != 0 )
+        ++local; // the shadowed quality() must be the one thresholded
+
+    const int glob = gsum( MPI_COMM_WORLD, local );
+    if ( rank == 0 )
+        std::printf( "  [%s] case13 (quality hook, minQuality=%.17g) %s: worst "
+                     "radius ratio %.17g, worst mean ratio %.17g; default "
+                     "accepted=%lld rejectedGeometric=%lld, mean-ratio policy "
+                     "accepted=%lld rejectedGeometric=%lld\n",
+                     tag, kHookThreshold, glob == 0 ? "ok" : "FAIL", worstRR,
+                     worstMR, rd.accepted, rd.rejectedGeometric, rm.accepted,
+                     rm.rejectedGeometric );
+    return glob == 0 ? 0 : 1;
+}
+
 //! Case 7: the valence use case. The fixture starts optimal, so the assertion
 //! is that three rounds of valence-driven flips do not DEGRADE it.
 template <class MeshT, class Exec>
@@ -1452,6 +1626,7 @@ static int run( int rank, int size, const char* tag )
     fails += caseEmptyAndHalo<MeshT, Exec>( rank, size, tag );
     fails += caseFamilyGuard<MeshT, Exec>( rank, tag );
     fails += caseComposedWithSplit<MeshT, Exec>( rank, tag );
+    fails += caseQualityHook<MeshT, Exec>( rank, tag );
     std::fflush( stdout );
     return fails;
 }

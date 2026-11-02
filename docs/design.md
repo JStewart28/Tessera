@@ -1078,6 +1078,16 @@ larger. Every length is nonetheless computed through `edgeLen2Canonical()`, the
 library's one canonical producer, so two ranks comparing the same edge get
 bit-identical doubles regardless of endpoint order.
 
+**The geometric test is the policy's, not the library's.** The coordinator
+rejects a flip either of whose new faces points more than
+`policy.maxNormalDeviation` from the area-weighted mean of the two old normals,
+or scores below `policy.minQuality` on `policy.quality(p0, p1, p2)`. Both are
+read from a duck-typed host struct; `DefaultFlipPolicy::quality` is the radius
+ratio scaled to 1 for an equilateral triangle, and a consumer whose remesher
+thresholds a different metric derives from the default and shadows `quality`.
+Because the coordinator holds all four positions, any metric of the triangle's
+corners is expressible.
+
 ### The duplicate-edge round
 
 Does the edge the flip would create already exist? Flipping into an existing edge
@@ -1263,7 +1273,13 @@ priority and the merged position — and asks the two vertex coordinators one
 question each, whose reply carries the endpoint's ring, its owner, every owned face
 and owned edge incident on it *with owners*, and the **geometric verdict**. The
 fold and quality tests are evaluated *there* because the vertex coordinator is the
-only place where every surviving face incident on an endpoint is known. There is no
+only place where every surviving face incident on an endpoint is known. The
+quality test thresholds `policy.quality(p0, p1, p2)` on each surviving face with
+the merged corner in place, against `policy.minQuality`; the default is the same
+radius ratio `DefaultFlipPolicy::quality` returns, and a consumer supplies its
+own metric by shadowing `quality` in a derived policy. That hook exists because
+the test needs both endpoints' full one-rings, which only the vertex coordinator
+assembles — a caller cannot reproduce it while building the mask. There is no
 shared advertisement helper with `flipEdges()`: `detail::FlipAdvert` is private to
 that header and carries a flip-specific payload, and a shared abstraction over two
 payloads that differ was not worth destabilising an operation that is green at ten

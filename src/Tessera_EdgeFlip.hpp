@@ -257,17 +257,71 @@ struct FlipResult
     std::vector<std::pair<EdgeKey, EdgeKey>> flipped;
 };
 
+namespace detail
+{
+
+//! Twice the area-weighted normal of triangle (p0,p1,p2): (p1-p0) x (p2-p0).
+inline void flipTriNormal( const double* p0, const double* p1,
+                           const double* p2, double n[3] )
+{
+    const double u[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+    const double v[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+    n[0] = u[1] * v[2] - u[2] * v[1];
+    n[1] = u[2] * v[0] - u[0] * v[2];
+    n[2] = u[0] * v[1] - u[1] * v[0];
+}
+
+//! Radius ratio (inradius/circumradius) of a triangle, SCALED TO 1 for an
+//! equilateral one: 2 * (4 area^2) / (s * abc). 0 for a degenerate triangle.
+inline double flipRadiusRatio( const double* p0, const double* p1,
+                               const double* p2 )
+{
+    const double* p[3] = { p0, p1, p2 };
+    double side[3];
+    for ( int k = 0; k < 3; ++k )
+    {
+        double s = 0.0;
+        for ( int d = 0; d < 3; ++d )
+        {
+            const double dd = p[( k + 1 ) % 3][d] - p[k][d];
+            s += dd * dd;
+        }
+        side[k] = std::sqrt( s );
+    }
+    double n[3];
+    flipTriNormal( p0, p1, p2, n );
+    const double area =
+        0.5 * std::sqrt( n[0] * n[0] + n[1] * n[1] + n[2] * n[2] );
+    const double abc = side[0] * side[1] * side[2];
+    const double s = 0.5 * ( side[0] + side[1] + side[2] );
+    if ( !( abc > 0.0 ) || !( s > 0.0 ) )
+        return 0.0;
+    return 2.0 * ( 4.0 * area * area ) / ( s * abc );
+}
+
+} // end namespace detail
+
 //! Geometric admissibility of a candidate flip, evaluated at the coordinator
-//! from the four corner positions of the quad.
+//! from the four corner positions of the quad. Duck-typed: a consumer derives
+//! from this and shadows one member, as DefaultCollapsePolicy documents, e.g. to
+//! supply its own triangle-quality metric through quality().
 struct DefaultFlipPolicy
 {
     //! Reject if either new face's normal points more than this far from the
     //! area-weighted average of the two old normals (radians). Guards against
     //! flipping a nearly-flat pair into a fold.
     double maxNormalDeviation = 0.35;
-    //! Reject if either new face's radius ratio (inradius/circumradius, scaled
-    //! to 1 for an equilateral triangle) falls below this.
+    //! Reject if either new face's quality() falls below this.
     double minQuality = 0.05;
+
+    //! Quality of triangle (p0,p1,p2), each a 3-vector, evaluated on the host.
+    //! The default is the radius ratio (detail::flipRadiusRatio): in [0,1], 1
+    //! for an equilateral triangle, 0 for a degenerate one. minQuality
+    //! thresholds whatever this returns.
+    double quality( const double* p0, const double* p1, const double* p2 ) const
+    {
+        return detail::flipRadiusRatio( p0, p1, p2 );
+    }
 };
 
 namespace detail
@@ -363,17 +417,6 @@ struct FlipNote
     EdgeKey newKey;
 };
 
-//! Twice the area-weighted normal of triangle (p0,p1,p2): (p1-p0) x (p2-p0).
-inline void flipTriNormal( const double* p0, const double* p1,
-                           const double* p2, double n[3] )
-{
-    const double u[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
-    const double v[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
-    n[0] = u[1] * v[2] - u[2] * v[1];
-    n[1] = u[2] * v[0] - u[0] * v[2];
-    n[2] = u[0] * v[1] - u[1] * v[0];
-}
-
 //! Angle in radians between two vectors, or -1 if either is degenerate.
 inline double flipAngleBetween( const double a[3], const double b[3] )
 {
@@ -384,34 +427,6 @@ inline double flipAngleBetween( const double a[3], const double b[3] )
     double c = ( a[0] * b[0] + a[1] * b[1] + a[2] * b[2] ) / ( na * nb );
     c = std::max( -1.0, std::min( 1.0, c ) );
     return std::acos( c );
-}
-
-//! Radius ratio (inradius/circumradius) of a triangle, SCALED TO 1 for an
-//! equilateral one: 2 * (4 area^2) / (s * abc). 0 for a degenerate triangle.
-inline double flipRadiusRatio( const double* p0, const double* p1,
-                               const double* p2 )
-{
-    const double* p[3] = { p0, p1, p2 };
-    double side[3];
-    for ( int k = 0; k < 3; ++k )
-    {
-        double s = 0.0;
-        for ( int d = 0; d < 3; ++d )
-        {
-            const double dd = p[( k + 1 ) % 3][d] - p[k][d];
-            s += dd * dd;
-        }
-        side[k] = std::sqrt( s );
-    }
-    double n[3];
-    flipTriNormal( p0, p1, p2, n );
-    const double area =
-        0.5 * std::sqrt( n[0] * n[0] + n[1] * n[1] + n[2] * n[2] );
-    const double abc = side[0] * side[1] * side[2];
-    const double s = 0.5 * ( side[0] + side[1] + side[2] );
-    if ( !( abc > 0.0 ) || !( s > 0.0 ) )
-        return 0.0;
-    return 2.0 * ( 4.0 * area * area ) / ( s * abc );
 }
 
 //! Implementation of flipEdges(); see the header comment for the algorithm and
@@ -659,8 +674,8 @@ FlipResult flipEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& h
                                 dp <= policy.maxNormalDeviation &&
                                 dq <= policy.maxNormalDeviation );
         const bool okQuality =
-            ( flipRadiusRatio( pLo, pX, pW ) >= policy.minQuality &&
-              flipRadiusRatio( pHi, pW, pX ) >= policy.minQuality );
+            ( policy.quality( pLo, pX, pW ) >= policy.minQuality &&
+              policy.quality( pHi, pW, pX ) >= policy.minQuality );
         if ( okNormal && okQuality )
             ++it;
         else

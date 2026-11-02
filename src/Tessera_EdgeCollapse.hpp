@@ -212,8 +212,9 @@ namespace Tessera
 //      corner, which is not what a collapse needs; refactoring that header to
 //      extract a common helper would destabilise an operation that is green at
 //      ten registrations for the sake of an abstraction over two payloads that
-//      differ. Only its three geometry helpers (detail::flipTriNormal,
-//      flipAngleBetween, flipRadiusRatio) are reused, unchanged.
+//      differ. Only its three geometry helpers are reused, unchanged:
+//      detail::flipTriNormal and flipAngleBetween directly, and flipRadiusRatio
+//      as the default DefaultCollapsePolicy::quality.
 //
 //   2. ASSEMBLE THE CANDIDATE FROM COORDINATOR STATE, NOT FROM RESIDENCY. The
 //      edge coordinator for (a,b) holds both incident faces' advertisements,
@@ -230,9 +231,9 @@ namespace Tessera
 //      is the only place where every surviving face incident on an endpoint is
 //      known. Each such face has the endpoint's position replaced by the merged
 //      position; the candidate is rejected if any face's normal rotates by more
-//      than policy.maxNormalRotation (the fold guard) or if any face's radius
-//      ratio falls below policy.minQuality. The two dying faces -- the ones
-//      containing both endpoints -- are skipped.
+//      than policy.maxNormalRotation (the fold guard) or if any face's
+//      policy.quality() falls below policy.minQuality. The two dying faces --
+//      the ones containing both endpoints -- are skipped.
 //
 //   3. INDEPENDENT-SET ROUND. The coordinator names, for each surviving
 //      candidate, every vertex in {a, b} UNION ring(a) UNION ring(b), and sends
@@ -326,7 +327,7 @@ struct CollapseResult
     //! Rejected: a surviving incident face's normal would rotate by more than
     //! policy.maxNormalRotation.
     long long rejectedNormalFlip = 0;
-    //! Rejected: a surviving incident face's radius ratio would fall below
+    //! Rejected: a surviving incident face's policy.quality() would fall below
     //! policy.minQuality.
     long long rejectedQuality = 0;
     //! Rejected: passed every test but lost the independent-set round to a
@@ -384,10 +385,19 @@ struct DefaultCollapsePolicy
     //! Reject if any surviving incident face's normal rotates more than this
     //! (radians) -- the standard fold guard.
     double maxNormalRotation = 0.5;
-    //! Reject if any surviving incident face's radius ratio (inradius /
-    //! circumradius, scaled to 1 for an equilateral triangle -- the same
-    //! convention DefaultFlipPolicy::minQuality uses) falls below this.
+    //! Reject if any surviving incident face's quality() falls below this.
     double minQuality = 0.05;
+
+    //! Quality of triangle (p0,p1,p2), each a 3-vector, evaluated on the host
+    //! with the face's merged corner in place. The default is the radius ratio
+    //! (detail::flipRadiusRatio, the metric DefaultFlipPolicy::quality uses): in
+    //! [0,1], 1 for an equilateral triangle, 0 for a degenerate one. minQuality
+    //! thresholds whatever this returns; shadow it in a derived policy to
+    //! supply a different metric.
+    double quality( const double* p0, const double* p1, const double* p2 ) const
+    {
+        return detail::flipRadiusRatio( p0, p1, p2 );
+    }
 
     //! Merged position: out[0..dim) = (1-t)*a[d] + t*b[d].
     void interpolatePosition( double* out, const double* a, const double* b,
@@ -992,7 +1002,7 @@ collapseEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& halo,
                         const double rot = flipAngleBetween( nOld, nNew );
                         if ( rot < 0.0 || rot > policy.maxNormalRotation )
                             g.normalOk = 0;
-                        if ( flipRadiusRatio( np[0], np[1], np[2] ) <
+                        if ( policy.quality( np[0], np[1], np[2] ) <
                              policy.minQuality )
                             g.qualityOk = 0;
                     }
