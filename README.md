@@ -518,6 +518,7 @@ struct DefaultFlipPolicy
 {
     double maxNormalDeviation = 0.35;  // radians
     double minQuality = 0.05;          // thresholds quality()
+    FlipConflict conflict = FlipConflict::SharedFace;  // independent-set relation
 
     // Host; p0..p2 are 3-vectors. Radius ratio, in [0,1], 1 = equilateral.
     double quality( const double* p0, const double* p1,
@@ -560,10 +561,27 @@ evaluable from the two incident faces, which the edge's coordinator supplies.
 Pulling valence inside would force depth 2 and hard-code one selection criterion
 into a general operation.
 
-**At most an independent set is applied per call.** Two flips sharing a *face*
-conflict — that face would be rewritten twice — and only the higher-priority one
-survives; two sharing only a vertex do not conflict. Iterating internally would
-hide an unbounded number of collectives behind one call, so **the caller loops**:
+**At most an independent set is applied per call**, and of two conflicting flips
+only the higher-priority one survives. The policy's `conflict` member chooses the
+relation:
+
+- `FlipConflict::SharedFace`, the default. Two flips sharing a *face* conflict —
+  that face would be rewritten twice — and two sharing only a vertex do not.
+- `FlipConflict::EndpointInQuad`. Two flips conflict iff a vertex is an
+  *endpoint* of one and any of the four quad *corners* of the other; two sharing
+  only an opposite corner do not. It is the symmetric form of a sequential
+  valence pass that marks all four corners of each accepted flip touched and
+  skips a later edge whose own endpoint is touched, and it implies `SharedFace`.
+
+```cpp
+DefaultFlipPolicy valence;
+valence.conflict = FlipConflict::EndpointInQuad;
+FlipResult r = flipEdges( mesh, halo, valenceMask, valence );
+```
+
+A policy deriving from `DefaultFlipPolicy` inherits `conflict`. Iterating
+internally would hide an unbounded number of collectives behind one call, so
+**the caller loops**:
 
 ```cpp
 for ( int round = 0; round < maxRounds; ++round )
@@ -575,8 +593,8 @@ for ( int round = 0; round < maxRounds; ++round )
 
 which is also what lets the caller re-derive valences between rounds. The
 priority is `(squared length descending, EdgeKey ascending)` and contains **no
-gid**, so the accepted set is a pure function of the global mesh and is identical
-at every rank count.
+gid**, so under either relation the accepted set is a pure function of the global
+mesh and is identical at every rank count.
 
 Because the independent set is not a serial shortest-first sweep, **the flip set
 differs from a serial pass and both are valid** — a consumer must compare quality

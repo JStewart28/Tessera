@@ -72,6 +72,16 @@
 //      The default policy rejects the flip as rejectedGeometric; a policy
 //      deriving from it and shadowing quality() with the mean ratio accepts it,
 //      on the same mesh and the same mask.
+//  14. THE ENDPOINT-IN-QUAD CONFLICT RELATION. Under FlipConflict::
+//      EndpointInQuad no accepted flip's endpoint is a corner of another
+//      accepted flip -- checked from the gathered flip map, whose (old key,
+//      new key) pairs give each flip's endpoints and opposite corners. On a
+//      two-ring bipyramid: two flips sharing only an opposite corner are both
+//      accepted; two pairs, sharing no face but each with one flip's endpoint
+//      among the other's corners, are accepted whole by SharedFace and lose
+//      exactly one flip to rejectedConflict under EndpointInQuad, one pair
+//      through each branch of the endorsement rule. On the icosphere with every
+//      edge marked, the accepted set equals the MPI_COMM_SELF one.
 //
 // Runs on host (Serial) and device (default, HIP), ranks 1-5.
 
@@ -1264,6 +1274,298 @@ static int caseQualityHook( int rank, const char* tag )
     return glob == 0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// Case 14's fixture: a TWO-RING BIPYRAMID.
+// ---------------------------------------------------------------------------
+//
+// Top apex T = 0 at z = 1.5 and bottom apex B = 1 at z = -0.6; an upper ring
+// R_i = 2 + i of radius 1 at z = 0.5 and a lower ring S_i = 10 + i of radius 0.6
+// at z = -0.5, i = 0..7, both at angle 2*pi*i/8. T fans over R, B fans under S,
+// and the band splits each trapezoid (R_i, R_i+1, S_i+1, S_i) on the diagonal
+// (R_i+1, S_i). The solid is convex and contains the origin, so each triangle
+// is wound outward by the sign of its normal against its centroid. V 18, E 48,
+// F 32.
+//
+// The four edges the case marks, with endpoints | opposite corners and squared
+// length:
+//
+//   ring  (R0,R1) = (2,3)   | T, S0 = 0, 10    2 - sqrt(2) = 0.586
+//   ring  (R4,R5) = (6,7)   | T, S4 = 0, 14    0.586
+//   spoke (T,R4)  = (0,6)   | R3, R5 = 5, 7    2
+//   spoke (B,S0)  = (1,10)  | S7, S1 = 17, 11  0.37
+//
+// and the three pairs it marks, no pair sharing a face:
+//
+//   shared opposite -- (2,3) + (6,7) share only the opposite corner T. No
+//     conflict under either relation, so both are accepted: EndpointInQuad is
+//     not plain vertex disjointness.
+//   endpoint wins   -- (2,3) + (0,6). T is an endpoint of the spoke and an
+//     opposite corner of the ring edge. The best candidate at T is the longer
+//     spoke, which names T as an endpoint, so it alone is endorsed there.
+//   opposite wins   -- (2,3) + (1,10). S0 is an endpoint of the spoke and an
+//     opposite corner of the ring edge. The best candidate at S0 is the longer
+//     ring edge, which names S0 as opposite, so the spoke is not endorsed.
+//
+// No flip creates an existing edge, and the case uses the permissive policy
+// {maxNormalDeviation = pi, minQuality = 0}, so the independent-set round alone
+// decides. A Python model of both relations on this soup gives the same
+// accepted sets the case asserts.
+static TriangleSoup<double> twoRingBipyramidSoup()
+{
+    const int n = 8;
+    const double twoPi = 2.0 * 3.14159265358979323846;
+    TriangleSoup<double> soup;
+    auto push = [&]( double x, double y, double z )
+    {
+        soup.positions.push_back( x );
+        soup.positions.push_back( y );
+        soup.positions.push_back( z );
+    };
+    push( 0.0, 0.0, 1.5 );
+    push( 0.0, 0.0, -0.6 );
+    for ( int i = 0; i < n; ++i )
+        push( std::cos( twoPi * i / n ), std::sin( twoPi * i / n ), 0.5 );
+    for ( int i = 0; i < n; ++i )
+        push( 0.6 * std::cos( twoPi * i / n ), 0.6 * std::sin( twoPi * i / n ),
+              -0.5 );
+
+    auto tri = [&]( int a, int b, int c )
+    {
+        const double* p = soup.positions.data();
+        double u[3], v[3], nrm[3], dot = 0.0;
+        for ( int d = 0; d < 3; ++d )
+        {
+            u[d] = p[3 * b + d] - p[3 * a + d];
+            v[d] = p[3 * c + d] - p[3 * a + d];
+        }
+        nrm[0] = u[1] * v[2] - u[2] * v[1];
+        nrm[1] = u[2] * v[0] - u[0] * v[2];
+        nrm[2] = u[0] * v[1] - u[1] * v[0];
+        for ( int d = 0; d < 3; ++d )
+            dot += nrm[d] * ( p[3 * a + d] + p[3 * b + d] + p[3 * c + d] );
+        if ( dot < 0.0 )
+            std::swap( b, c );
+        soup.triangles.push_back( a );
+        soup.triangles.push_back( b );
+        soup.triangles.push_back( c );
+    };
+    for ( int i = 0; i < n; ++i )
+    {
+        const int r0 = 2 + i, r1 = 2 + ( i + 1 ) % n;
+        const int s0 = 10 + i, s1 = 10 + ( i + 1 ) % n;
+        tri( 0, r0, r1 );
+        tri( 1, s1, s0 );
+        tri( r0, r1, s0 );
+        tri( r1, s1, s0 );
+    }
+    return soup;
+}
+
+//! The number of ORDERED pairs (E1, E2) of distinct flips in `flips` with an
+//! endpoint of E1 among the four corners of E2 -- the pairs EndpointInQuad
+//! forbids. A flip's corners are its old key's ids and its new key's ids.
+static long long endpointInQuadViolations(
+    const std::set<std::pair<EdgeKey, EdgeKey>>& flips )
+{
+    std::map<GlobalId, long long> endpointOf;
+    for ( const auto& kv : flips )
+        for ( int j = 0; j < 2; ++j )
+            ++endpointOf[kv.first.id[j]];
+    long long bad = 0;
+    for ( const auto& kv : flips )
+    {
+        const GlobalId corner[4] = { kv.first.id[0], kv.first.id[1],
+                                     kv.second.id[0], kv.second.id[1] };
+        for ( int j = 0; j < 4; ++j )
+        {
+            auto it = endpointOf.find( corner[j] );
+            if ( it != endpointOf.end() )
+                bad += it->second - ( j < 2 ? 1 : 0 ); // not itself
+        }
+    }
+    return bad;
+}
+
+//! One flipEdges() under `mode` with the permissive policy, on the case-14 soup
+//! with `marked` marked, or (soup == nullptr) on the subdiv-2 icosphere with
+//! every owned edge marked. Returns the result and the global flip set.
+template <class MeshT, class Exec>
+static FlipResult conflictRun( MPI_Comm comm, const TriangleSoup<double>* soup,
+                               const std::set<EdgeKey>& marked,
+                               FlipConflict mode,
+                               std::set<std::pair<EdgeKey, EdgeKey>>& flips,
+                               int& local )
+{
+    using mem = typename Exec::memory_space;
+    MeshT mesh( comm );
+    MeshHalo<mem> halo;
+    if ( soup )
+    {
+        buildFromTriangleSoup( mesh, *soup );
+        auto faceOwner = facePartitionByAxis( mesh );
+        distribute( mesh, halo, faceOwner );
+    }
+    else
+        setupOn<MeshT, Exec>( comm, mesh, halo );
+
+    long long V, E, F;
+    counts( mesh, V, E, F );
+    if ( soup ? ( V != 18 || E != 48 || F != 32 )
+              : ( V != V0 || E != E0 || F != F0 ) )
+        ++local; // fixture drifted
+
+    DefaultFlipPolicy policy;
+    policy.maxNormalDeviation = std::acos( -1.0 );
+    policy.minQuality = 0.0;
+    policy.conflict = mode;
+    const std::vector<char> mask =
+        soup ? maskFromKeys( mesh, marked )
+             : std::vector<char>( mesh.numOwnedEdges(), 1 );
+    const FlipResult res = flipEdges( mesh, halo, mask, policy );
+
+    local += checkAll( mesh, V, E, F );
+    local += checkCountersPartition( res );
+    local += TesseraTest::checkKeyTables( mesh );
+    flips = globalFlipSet( comm, res );
+    if ( static_cast<long long>( flips.size() ) != res.accepted )
+        ++local; // the flip map is not complete/consistent
+    return res;
+}
+
+static std::string keyStr( const EdgeKey& k )
+{
+    return "(" + std::to_string( static_cast<unsigned long long>( k.id[0] ) ) +
+           "," + std::to_string( static_cast<unsigned long long>( k.id[1] ) ) +
+           ")";
+}
+
+//! Case 14: FlipConflict::EndpointInQuad accepts no pair in which an endpoint
+//! of one flip is a corner of another, accepts two flips sharing only an
+//! opposite corner, and rejects exactly one of a pair that SharedFace accepts
+//! whole. The accepted sets are rank-count invariant.
+template <class MeshT, class Exec>
+static int caseEndpointInQuad( int rank, int size, const char* tag )
+{
+    using FlipSet = std::set<std::pair<EdgeKey, EdgeKey>>;
+    int local = 0;
+    const TriangleSoup<double> soup = twoRingBipyramidSoup();
+    auto key = []( int a, int b )
+    {
+        return makeEdgeKey( static_cast<GlobalId>( a ),
+                            static_cast<GlobalId>( b ) );
+    };
+
+    struct Pair
+    {
+        const char* name;
+        EdgeKey a, b;
+        std::set<EdgeKey> eiqAccepted; // expected under EndpointInQuad
+    };
+    const Pair pairs[3] = {
+        { "shared opposite", key( 2, 3 ), key( 6, 7 ),
+          { key( 2, 3 ), key( 6, 7 ) } },
+        { "endpoint wins", key( 2, 3 ), key( 0, 6 ), { key( 0, 6 ) } },
+        { "opposite wins", key( 2, 3 ), key( 1, 10 ), { key( 2, 3 ) } } };
+
+    for ( const Pair& p : pairs )
+    {
+        const std::set<EdgeKey> marked = { p.a, p.b };
+        FlipSet sfSet, eiqSet;
+        const FlipResult sf = conflictRun<MeshT, Exec>(
+            MPI_COMM_WORLD, &soup, marked, FlipConflict::SharedFace, sfSet,
+            local );
+        const FlipResult eiq = conflictRun<MeshT, Exec>(
+            MPI_COMM_WORLD, &soup, marked, FlipConflict::EndpointInQuad,
+            eiqSet, local );
+
+        std::set<EdgeKey> sfKeys, eiqKeys;
+        for ( const auto& kv : sfSet )
+            sfKeys.insert( kv.first );
+        for ( const auto& kv : eiqSet )
+            eiqKeys.insert( kv.first );
+
+        for ( const FlipResult* r : { &sf, &eiq } )
+            if ( r->requested != 2 || r->rejectedBoundary != 0 ||
+                 r->rejectedDuplicateEdge != 0 || r->rejectedGeometric != 0 )
+                ++local; // only the independent-set round may decide
+        // No pair shares a face, so SharedFace accepts both.
+        if ( sf.accepted != 2 || sf.rejectedConflict != 0 || sfKeys != marked )
+            ++local;
+        if ( eiqKeys != p.eiqAccepted )
+            ++local;
+        if ( eiq.accepted != static_cast<long long>( p.eiqAccepted.size() ) ||
+             eiq.rejectedConflict != 2 - eiq.accepted )
+            ++local;
+        const long long sfBad = endpointInQuadViolations( sfSet );
+        const long long eiqBad = endpointInQuadViolations( eiqSet );
+        if ( eiqBad != 0 )
+            ++local;
+        // The fixture must be a real conflict exactly when EIQ rejects one.
+        if ( ( sfBad > 0 ) != ( p.eiqAccepted.size() == 1 ) )
+            ++local;
+
+        if ( rank == 0 )
+        {
+            std::string acc;
+            for ( const EdgeKey& k : eiqKeys )
+                acc += ( acc.empty() ? "" : " " ) + keyStr( k );
+            std::printf( "  [%s] case14 %s %s+%s: SharedFace accepted=%lld "
+                         "conflict=%lld violations=%lld; EndpointInQuad "
+                         "accepted=%lld conflict=%lld violations=%lld "
+                         "{%s}\n",
+                         tag, p.name, keyStr( p.a ).c_str(),
+                         keyStr( p.b ).c_str(), sf.accepted,
+                         sf.rejectedConflict, sfBad, eiq.accepted,
+                         eiq.rejectedConflict, eiqBad, acc.c_str() );
+        }
+    }
+
+    // Every owned edge of the icosphere marked: no accepted pair conflicts,
+    // and the accepted set equals the one the same run computes alone.
+    FlipSet sfW, eiqW, eiqS;
+    const std::set<EdgeKey> none;
+    const FlipResult sf = conflictRun<MeshT, Exec>(
+        MPI_COMM_WORLD, nullptr, none, FlipConflict::SharedFace, sfW, local );
+    const FlipResult w = conflictRun<MeshT, Exec>(
+        MPI_COMM_WORLD, nullptr, none, FlipConflict::EndpointInQuad, eiqW,
+        local );
+    const FlipResult s = conflictRun<MeshT, Exec>(
+        MPI_COMM_SELF, nullptr, none, FlipConflict::EndpointInQuad, eiqS,
+        local );
+    const long long sfBad = endpointInQuadViolations( sfW );
+    const long long wBad = endpointInQuadViolations( eiqW );
+    const long long sBad = endpointInQuadViolations( eiqS );
+    if ( wBad != 0 || sBad != 0 )
+        ++local;
+    if ( w.accepted <= 0 )
+        ++local; // vacuous: the case proves nothing if nothing was flipped
+    if ( eiqW != eiqS )
+        ++local; // the accepted set depends on the decomposition
+    if ( w.accepted != s.accepted || w.requested != s.requested ||
+         w.rejectedBoundary != s.rejectedBoundary ||
+         w.rejectedDuplicateEdge != s.rejectedDuplicateEdge ||
+         w.rejectedGeometric != s.rejectedGeometric ||
+         w.rejectedConflict != s.rejectedConflict )
+        ++local;
+
+    const int glob = gsum( MPI_COMM_WORLD, local );
+    if ( rank == 0 )
+    {
+        std::printf( "  [%s] case14 icosphere all marked: requested=%lld; "
+                     "SharedFace accepted=%lld conflict=%lld violations=%lld; "
+                     "EndpointInQuad accepted=%lld dup=%lld geom=%lld "
+                     "conflict=%lld violations=%lld (SELF accepted=%lld "
+                     "violations=%lld, set %s)\n",
+                     tag, w.requested, sf.accepted, sf.rejectedConflict,
+                     sfBad, w.accepted, w.rejectedDuplicateEdge,
+                     w.rejectedGeometric, w.rejectedConflict, wBad,
+                     s.accepted, sBad, eiqW == eiqS ? "identical" : "DIFFERS" );
+        std::printf( "  [%s] case14 (endpoint-in-quad conflict, np%d) %s\n",
+                     tag, size, glob == 0 ? "ok" : "FAIL" );
+    }
+    return glob == 0 ? 0 : 1;
+}
+
 //! Case 7: the valence use case. The fixture starts optimal, so the assertion
 //! is that three rounds of valence-driven flips do not DEGRADE it.
 template <class MeshT, class Exec>
@@ -1627,6 +1929,7 @@ static int run( int rank, int size, const char* tag )
     fails += caseFamilyGuard<MeshT, Exec>( rank, tag );
     fails += caseComposedWithSplit<MeshT, Exec>( rank, tag );
     fails += caseQualityHook<MeshT, Exec>( rank, tag );
+    fails += caseEndpointInQuad<MeshT, Exec>( rank, size, tag );
     std::fflush( stdout );
     return fails;
 }

@@ -419,15 +419,6 @@ struct DefaultCollapsePolicy
 namespace detail
 {
 
-//! Coordinator rank of a VERTEX gid. The gid-modulo convention every other
-//! per-vertex coordinator round in the tree uses (compact()'s closure check,
-//! checkOwnershipPartition, the valence tally in test_flip_edges), named here so
-//! the collapse rounds read as coordinator rounds rather than as arithmetic.
-inline int vertexCoordRank( GlobalId g, int size )
-{
-    return static_cast<int>( g % static_cast<GlobalId>( size ) );
-}
-
 //! One (owned face, one of its three edges) advertisement to that EDGE's
 //! coordinator. Same SHAPE as detail::FlipAdvert -- see the header comment on
 //! why that type is not reused -- carrying everything needed to identify the

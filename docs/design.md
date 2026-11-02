@@ -1104,12 +1104,34 @@ is true by construction.
 
 ### The independent set, and why the priority carries no gid
 
-Two flips sharing a **face** conflict; two sharing only a vertex do not. No graph
-traversal is needed for that relation: each face owner sees its own three edges'
-verdicts, keeps the highest-priority candidate and endorses only that one back
-through the coordinator, which accepts an edge exactly when **both** its faces
-endorse it. A face can endorse at most one candidate, so no face is ever
-rewritten twice.
+The policy's `conflict` member chooses between two relations.
+
+**`FlipConflict::SharedFace`, the default.** Two flips sharing a **face**
+conflict; two sharing only a vertex do not. No graph traversal is needed for that
+relation: each face owner sees its own three edges' verdicts, keeps the
+highest-priority candidate and endorses only that one back through the
+coordinator, which accepts an edge exactly when **both** its faces endorse it. A
+face can endorse at most one candidate, so no face is ever rewritten twice.
+
+**`FlipConflict::EndpointInQuad`.** Two flips conflict iff a vertex is an
+**endpoint** of one and any of the four quad **corners** of the other; two
+sharing only an opposite corner do not. This is the symmetric form of a
+sequential valence pass that counts valences once, marks all four corners of each
+accepted flip touched, and skips a later edge iff one of its *own endpoints* is
+touched. It implies the face relation, because a flip sharing a face with another
+has both its endpoints among the other's corners, so the per-face round does not
+run. Instead each candidate is offered to the vertex coordinator
+(`detail::vertexCoordRank`, gid modulo the communicator size) of each of its four
+corners, tagged with the corner's role, endpoint or opposite. At the coordinator
+of $v$, let $B$ be the highest-priority candidate naming $v$. If $B$ names $v$ as
+an endpoint, $B$ alone is endorsed; otherwise every candidate naming $v$ as
+opposite is endorsed and none naming it as an endpoint. A candidate is accepted
+iff it collects all four endorsements.
+
+No conflicting pair is accepted. If accepted flips $E_1$ and $E_2$ conflicted at
+$v$, with $v$ an endpoint of $E_1$, then $E_1$ was endorsed at $v$ as an endpoint,
+so $B = E_1$ and $E_1$ was the only candidate endorsed at $v$ — but $E_2$ names
+$v$ and needed that endorsement too.
 
 **The priority is `(squared length descending, EdgeKey ascending)` and contains
 no gid.** Gids come from an `MPI_Exscan`: they are agreed across the ranks of one
@@ -1118,12 +1140,12 @@ finding that forced `splitEdges()`' diagonal tie-break away from the closure's
 lower-midpoint-gid rule, and it applies with full force here, because the whole
 value of a deterministic independent set is that it is a property of the mesh
 rather than of its decomposition. An `EdgeKey` is built from pre-existing vertex
-gids and *is* invariant, so the pair is a total order on distinct edges and the
-accepted set is a pure function of the global mesh.
+gids and *is* invariant, so the pair is a total order on distinct edges and, under
+either relation, the accepted set is a pure function of the global mesh.
 
-The result is an independent set, **not a maximal one**: an edge that loses on
-one face is not reconsidered when that face's winner is itself vetoed by its own
-other face. That is deliberate — one round, one bounded cost — and the caller
+The result is an independent set, **not a maximal one**: an edge that loses at
+one endorsing site — a face, or a vertex coordinator — is not reconsidered when
+that site's winner is itself vetoed at another. That is deliberate — one round, one bounded cost — and the caller
 loops, watching `accepted`, which is also what lets it re-derive valences between
 rounds.
 

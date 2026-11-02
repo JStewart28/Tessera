@@ -151,12 +151,40 @@ namespace Tessera
 //        GEOMETRIC  -- the Policy's normal-deviation and quality tests, from
 //                      the four positions.
 //
-//   3. INDEPENDENT SET. Two flips sharing a FACE conflict -- that face would be
-//      rewritten twice -- and two sharing only a vertex do not. No graph
-//      traversal is needed: each face owner sees its own three edges' verdicts
-//      and keeps only the highest-priority candidate, then endorses it back
-//      through the coordinator, which accepts an edge only when BOTH of its
-//      faces endorse it.
+//   3. INDEPENDENT SET, under the conflict relation the Policy's `conflict`
+//      member selects (FlipConflict, below). Every loser counts into
+//      rejectedConflict.
+//
+//      FlipConflict::SharedFace, THE DEFAULT. Two flips sharing a FACE conflict
+//      -- that face would be rewritten twice -- and two sharing only a vertex
+//      do not. No graph traversal is needed: each face owner sees its own three
+//      edges' verdicts and keeps only the highest-priority candidate, then
+//      endorses it back through the coordinator, which accepts an edge only
+//      when BOTH of its faces endorse it.
+//
+//      FlipConflict::EndpointInQuad. Two flips conflict iff a vertex is an
+//      ENDPOINT of one and any of the four quad CORNERS of the other; two
+//      sharing only an opposite corner do not. It is the symmetric form of a
+//      sequential valence pass that marks all four corners of each accepted
+//      flip touched and skips a later edge iff one of its OWN ENDPOINTS is
+//      touched. It implies the face relation: a flip sharing a face with
+//      another has both its endpoints among the other's corners. Each
+//      candidate is offered to the detail::vertexCoordRank coordinator of each
+//      of its four corners, tagged with the corner's ROLE -- endpoint (lo, hi)
+//      or opposite (w, x). The four corners of a manifold quad are distinct, so
+//      a candidate names each vertex once. At the coordinator of v, with B the
+//      highest-priority candidate naming v:
+//        - if B names v as an ENDPOINT, B alone is endorsed;
+//        - otherwise EVERY candidate naming v as OPPOSITE is endorsed, and none
+//          naming it as an endpoint.
+//      A candidate is accepted iff it collects all four endorsements, and the
+//      per-face round does not run.
+//
+//      WHY ENDPOINTINQUAD ACCEPTS NO CONFLICTING PAIR. Suppose accepted flips E1
+//      and E2 conflict at v, with v an endpoint of E1 and a corner of E2. E1 is
+//      endorsed at v as an endpoint, which happens only when B = E1, and then
+//      E1 is the ONLY candidate endorsed at v. E2 names v, so it needed v's
+//      endorsement too -- a contradiction.
 //
 //      DECISION 2 -- THE PRIORITY IS (squared length DESCENDING, EdgeKey
 //      ASCENDING) AND CONTAINS NO GID. Gids come from an MPI_Exscan and are
@@ -167,14 +195,15 @@ namespace Tessera
 //      pre-existing vertex gids and IS invariant, and every length is computed
 //      through edgeLen2Canonical() (Tessera_RefineClosure.hpp) so two ranks
 //      comparing the same edge get bit-identical doubles regardless of endpoint
-//      order. The pair is a total order on distinct edges, so a face can endorse
-//      at most one candidate and the accepted set is a pure function of the
-//      global mesh.
+//      order. The pair is a total order on distinct edges, so every endorsing
+//      site -- a face under SharedFace, a vertex coordinator under
+//      EndpointInQuad -- has exactly one best candidate, and the accepted set is
+//      a pure function of the global mesh under either relation.
 //
 //      The result is an independent set, NOT a maximal one: an edge that loses
-//      on face F is not reconsidered when F's winner is itself vetoed by its
-//      other face. That is deliberate (Decision 3 below) -- one round, one
-//      bounded cost.
+//      at one endorsing site is not reconsidered when that site's winner is
+//      itself vetoed at another. That is deliberate (Decision 3 below) -- one
+//      round, one bounded cost.
 //
 //   4. APPLY. Each face owner rewrites its face's Verts/Edges in place and the
 //      edge owner rewrites the flipped edge's Verts/Faces; nothing is resized.
@@ -246,7 +275,9 @@ struct FlipResult
     //! Rejected: the Policy's normal-deviation or quality test failed.
     long long rejectedGeometric = 0;
     //! Rejected: passed every test but lost the independent-set round to a
-    //! higher-priority candidate on one of its two faces.
+    //! higher-priority candidate -- on one of its two faces under
+    //! FlipConflict::SharedFace, at one of its four corners under
+    //! FlipConflict::EndpointInQuad.
     long long rejectedConflict = 0;
 
     //! THE FLIP MAP: (old EdgeKey, new EdgeKey) for every accepted flip this
@@ -301,10 +332,23 @@ inline double flipRadiusRatio( const double* p0, const double* p1,
 
 } // end namespace detail
 
+//! Which pairs of candidate flips the independent-set round treats as
+//! conflicting (see step 3 of the header comment).
+enum class FlipConflict
+{
+    //! Two flips conflict iff they share a face.
+    SharedFace,
+    //! Two flips conflict iff a vertex is an endpoint of one and any of the
+    //! four quad corners of the other. Implies SharedFace.
+    EndpointInQuad
+};
+
 //! Geometric admissibility of a candidate flip, evaluated at the coordinator
-//! from the four corner positions of the quad. Duck-typed: a consumer derives
-//! from this and shadows one member, as DefaultCollapsePolicy documents, e.g. to
-//! supply its own triangle-quality metric through quality().
+//! from the four corner positions of the quad, and the conflict relation of the
+//! independent-set round. Duck-typed: a consumer derives from this and shadows
+//! one member, as DefaultCollapsePolicy documents, e.g. to supply its own
+//! triangle-quality metric through quality(). A derived policy inherits
+//! `conflict`.
 struct DefaultFlipPolicy
 {
     //! Reject if either new face's normal points more than this far from the
@@ -313,6 +357,8 @@ struct DefaultFlipPolicy
     double maxNormalDeviation = 0.35;
     //! Reject if either new face's quality() falls below this.
     double minQuality = 0.05;
+    //! The independent-set round's conflict relation.
+    FlipConflict conflict = FlipConflict::SharedFace;
 
     //! Quality of triangle (p0,p1,p2), each a 3-vector, evaluated on the host.
     //! The default is the radius ratio (detail::flipRadiusRatio): in [0,1], 1
@@ -407,6 +453,36 @@ struct EdgeApply
     GlobalId edgeGid;
     GlobalId v[2]; //!< the new endpoints, canonical (lo, hi)
     GlobalId f[2]; //!< the two (unchanged) incident face gids, ascending
+};
+
+//! Coordinator rank of a VERTEX gid. The gid-modulo convention every other
+//! per-vertex coordinator round in the tree uses (compact()'s closure check,
+//! checkOwnershipPartition, the valence tally in test_flip_edges), named here so
+//! the flip and collapse rounds read as coordinator rounds rather than as
+//! arithmetic.
+inline int vertexCoordRank( GlobalId g, int size )
+{
+    return static_cast<int>( g % static_cast<GlobalId>( size ) );
+}
+
+//! (a corner of a candidate's quad, that candidate, its priority length, the
+//! corner's role) delivered to the corner's VERTEX coordinator under
+//! FlipConflict::EndpointInQuad.
+struct FlipCornerOffer
+{
+    GlobalId v;
+    EdgeKey key;
+    double len2;
+    //! 1 if `v` is an endpoint of `key`, 0 if it is an opposite corner.
+    unsigned char endpoint;
+};
+
+//! A vertex coordinator's endorsement of one candidate naming that vertex,
+//! returned to the candidate's EDGE coordinator. Under
+//! FlipConflict::EndpointInQuad a candidate is accepted iff it collects four.
+struct FlipCornerVote
+{
+    EdgeKey key;
 };
 
 //! (old key, new key) for one accepted flip, delivered to every participant so
@@ -687,9 +763,69 @@ FlipResult flipEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& h
 
     // ---- Step 3: the independent set --------------------------------------
     //
-    // Offer each surviving candidate to BOTH its face owners; a face keeps the
-    // highest-priority candidate among its own edges and endorses only that
-    // one; a candidate is accepted iff it collects both endorsements.
+    // EndpointInQuad: offer each surviving candidate to the coordinator of each
+    // of its four corners, tagged with the corner's role; the header comment
+    // states the endorsement rule and why it accepts no conflicting pair; a
+    // candidate is accepted iff it collects four endorsements.
+    //
+    // SharedFace: offer each surviving candidate to BOTH its face owners; a
+    // face keeps the highest-priority candidate among its own edges and
+    // endorses only that one; a candidate is accepted iff it collects both
+    // endorsements.
+    if ( policy.conflict == FlipConflict::EndpointInQuad )
+    {
+        std::vector<std::vector<FlipCornerOffer>> offer( size );
+        for ( const auto& kv : cand )
+        {
+            const GlobalId corner[4] = { kv.first.id[0], kv.first.id[1],
+                                         kv.second.fwd->oppGid,
+                                         kv.second.bwd->oppGid };
+            for ( int j = 0; j < 4; ++j )
+                offer[vertexCoordRank( corner[j], size )].push_back(
+                    { corner[j], kv.first, kv.second.len2,
+                      static_cast<unsigned char>( j < 2 ? 1 : 0 ) } );
+        }
+        auto offers = allToAllV( comm, offer );
+
+        // (squared length DESCENDING, EdgeKey ASCENDING) -- no gid anywhere.
+        std::map<GlobalId, const FlipCornerOffer*> best;
+        for ( const auto& m : offers.data )
+        {
+            auto it = best.find( m.v );
+            if ( it == best.end() )
+                best.emplace( m.v, &m );
+            else if ( m.len2 > it->second->len2 ||
+                      ( m.len2 == it->second->len2 &&
+                        m.key < it->second->key ) )
+                it->second = &m;
+        }
+        std::vector<std::vector<FlipCornerVote>> vote( size );
+        for ( const auto& m : offers.data )
+        {
+            const FlipCornerOffer* b = best.at( m.v );
+            const bool endorse = b->endpoint ? ( &m == b ) : !m.endpoint;
+            if ( endorse )
+                vote[edgeCoordRank( m.key, size )].push_back( { m.key } );
+        }
+        auto votes = allToAllV( comm, vote );
+        for ( const auto& m : votes.data )
+        {
+            auto it = cand.find( m.key );
+            if ( it != cand.end() )
+                ++it->second.votes;
+        }
+        for ( auto it = cand.begin(); it != cand.end(); )
+        {
+            if ( it->second.votes == 4 )
+                ++it;
+            else
+            {
+                it = cand.erase( it );
+                ++locConflict;
+            }
+        }
+    }
+    else
     {
         std::vector<std::vector<FaceCand>> offer( size );
         for ( const auto& kv : cand )
@@ -893,9 +1029,12 @@ FlipResult flipEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& h
 //! its gid with new endpoints and the two faces keep theirs with new corners.
 //! A gid therefore no longer determines a key across this call.
 //!
-//! AT MOST AN INDEPENDENT SET IS APPLIED PER CALL -- two flips sharing a FACE
-//! conflict and only the higher-priority one survives, so a caller wanting more
-//! progress calls again and watches `accepted`:
+//! AT MOST AN INDEPENDENT SET IS APPLIED PER CALL, and only the higher-priority
+//! flip of a conflicting pair survives. `policy.conflict` names the relation:
+//! FlipConflict::SharedFace (the default), where two flips sharing a FACE
+//! conflict, or FlipConflict::EndpointInQuad, where two flips conflict iff a
+//! vertex is an endpoint of one and any quad corner of the other. A caller
+//! wanting more progress calls again and watches `accepted`:
 //!
 //!     while ( flipEdges( mesh, halo, selection( mesh ) ).accepted > 0 ) {}
 //!
