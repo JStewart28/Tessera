@@ -372,16 +372,23 @@ appended rather than truncated; recorded as T4 step 5.
 
 ## T4
 
-**Status: implemented at `8dc3ede`; the exit criterion has not run.** Job
-`f3gs2JMqXWTR` (`flux batch scripts/tuolumne/run_unit_tests.flux unit -R
-xdmf_series_SERIAL -V`, submitted from the repo root with `TESSERA_REPO`
-exported) sat in `SCHED` for over twenty minutes: pdebug had 0 of 40 nodes free
-and 54 jobs pending or running, with priority 40560 (fairshare 0.41). It was
-cancelled without running, so it produced no output file. Provenance at
-submit: HEAD `8dc3edee9da2c958486f04ef81e6da9b47d02de4`, spack env
-`/g/g20/stewartj/spack_envs/tuolumne_trilinos`, compiler `CC` = Cray clang
-20.0.0. The next session resubmits the same command and appends the results
-here.
+**Status: verified.** Job `f3gsBeJgYReP` (`flux batch
+scripts/tuolumne/run_unit_tests.flux unit -R xdmf_series_SERIAL -V`, submitted
+from the repo root with `TESSERA_REPO` exported) exits 0, and its output
+`tessera-unit.f3gsBeJgYReP.out` ends with `unit tests complete (rc=0)`. ctest
+reports 3/3 passed: `xdmf_series_SERIAL_np1`, `_np2` and `_np3`, each printing
+`[Serial] xdmf series master ok (fails=0)`. Provenance at submit: HEAD
+`87fa164698bdba3e2e4dd22ff0cd0aecded9b514` (docs only on top of the code at
+`8dc3ede`; the binary `build-tuolumne/tests/tessera_test_xdmf_series_SERIAL` was
+built from `8dc3ede`), spack env `/g/g20/stewartj/spack_envs/tuolumne_trilinos`,
+compiler `CC` = Cray clang 20.0.0. After the run, `build-tuolumne/tests/` holds
+no `*_reopen*` and no `*.xmfindex` file. An earlier submission of the same
+command, `f3gs2JMqXWTR`, sat in `SCHED` for over twenty minutes (pdebug had 0 of
+40 nodes free, 54 jobs pending or running, priority 40560, fairshare 0.41) and
+was cancelled without running.
+
+**Numbers.** ctest wall time per rank count: np1 7.94 s, np2 4.71 s, np3 5.13 s;
+17.80 s in total.
 
 **Built.** `make -j32` of the whole `build-tuolumne/` tree succeeds on the login
 node, including `tessera_test_xdmf_series_SERIAL` and `mesh_pipeline`. The only
@@ -463,12 +470,16 @@ asserts, on every rank, that the reopen throws `std::runtime_error` and that
 cleanup block removes the second master, its index, and all three frames'
 `.h5`/`.xmf`.
 
-**Bugs only running revealed:** not yet known, because the test has not run.
+**Bugs only running revealed:** none. Both failure cases threw on every rank
+with the index path in the message. The np1 messages, as rank 0 printed them:
 
-**Affects:** V1 — a reopened master is worth opening only if the run shows the
-reopen rewriting the master byte-identically. The test asserts that, but it
-deletes its output, so V1 gains nothing new from a reopened master unless the
-T2-style cleanup-suppressed run is repeated on the `_reopen` stem. Recommend
-not adding it to V1's inputs. The master's bytes after a reopen are identical
-to the original by assertion, so any reader behaviour V1 observes on the T2/T3
-masters carries over.
+```
+(the index's time lines swapped) threw: Tessera::MeshSeries: cannot reopen the series in 'tessera_test_xdmf_series_SERIAL_np1_reopen.xmfindex': line 2 'tessera_test_xdmf_series_SERIAL_np1_reopen_frame0 0': time 0 is not strictly greater than the previous line's
+(the index deleted) threw: Tessera::MeshSeries: cannot reopen the series in 'tessera_test_xdmf_series_SERIAL_np1_reopen.xmfindex': cannot open it for reading (No such file or directory)
+```
+
+np2 and np3 print the same messages with their own stems.
+
+**Affects:** V1 does not need a reopened master among its inputs, because the
+run asserts that the master a reopen rewrites is byte-identical to the original,
+so what V1 observes on the T2/T3 masters carries over.

@@ -181,7 +181,7 @@ stem whose directory differs from the master's.
 
 ## Current state
 
-T1, T2 and T3 are done; T4's code is committed but unverified; V1 is not started. What exists:
+T1, T2, T3 and T4 are done; V1 is not started. What exists:
 
 - `Tessera::XdmfField` ([src/Tessera_Xdmf.hpp:32](../src/Tessera_Xdmf.hpp#L32))
   and `Tessera::XdmfFrame` ([:43](../src/Tessera_Xdmf.hpp#L43)), the latter
@@ -449,7 +449,7 @@ on all three. A rerun with the same `--out` overwrites the frames, and its first
 8-line index T3's rerun observed, verified by `tests/test_xdmf_series.cpp` (see
 [the progress log](fix-file-grouping-io-progress-log.md#index-truncation-on-a-new-series)).
 
-### T4 — Restart: reopen an existing series and keep appending — **IN PROGRESS** (code at `8dc3ede`; exit criterion not yet run, see the [T4 log](fix-file-grouping-io-progress-log.md#t4))
+### T4 — Restart: reopen an existing series and keep appending — **DONE**
 
 **Depends on:** T2. Independent of T3. Beantik needs it: its restarts resume
 mid-series.
@@ -524,6 +524,25 @@ wrote; `numFrames()` on the reopened object is asserted on every rank (2 after
 construction, 3 after the write). Failure direction: reopening with the
 `.xmfindex` deleted, and with its two time lines swapped into decreasing order,
 each throws `std::runtime_error` naming the index path **on every rank**.
+
+**Met.** `ctest -L unit -R xdmf_series_SERIAL` passes 3/3 — np1, np2 and np3 —
+in job `f3gsBeJgYReP`, binary built from commit `8dc3ede` (HEAD `87fa164` at
+submit, a docs-only change), spack env `~/spack_envs/tuolumne_trilinos/`. Each
+rank count prints `[Serial] xdmf series master ok (fails=0)`. Assertions that
+ran, on the `<masterStem>_reopen` series of the distributed icosphere(2): after
+two `write()` calls, destroying the object and reopening with `ReopenSeries` on
+`MPI_COMM_WORLD`, `numFrames()` is 2 on every rank, and 3 on every rank after a
+third `write()`; the master the reopen rewrote is byte-identical to the one the
+first object left; the final master holds exactly three `<Time Value=`, `0`,
+`0.5`, `1.25` in that order; its first two child grids, each cut from its opening
+tag through its own `</Grid>`, are byte-identical to the first object's; and the
+`.xmfindex` holds all three `"<stem> <time>"` lines in order, so the reopened
+series appended to it rather than replacing it. Failure direction: with the
+index's two time lines swapped into decreasing order, and with the index deleted,
+the reopen throws `std::runtime_error` on every rank, and every rank's `what()`
+contains the `..._reopen.xmfindex` path. The test leaves no `*_reopen*` or
+`*.xmfindex` file in `build-tuolumne/tests/`. Example messages are in
+[the T4 log](fix-file-grouping-io-progress-log.md#t4).
 
 ### V1 — Confirm in Paraview, in both reader families — **NOT STARTED**
 
