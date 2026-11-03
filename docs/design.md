@@ -1102,6 +1102,36 @@ for any of this: it is best-effort by design (`migrate()` carries it verbatim, s
 it can name a face no rank holds), and incidence derived from the advertisements
 is true by construction.
 
+The same round stops two flips in one call from creating the **same** edge. Two
+candidates `(a,b | c,d)` and `(a',b' | c,d)` with the same opposite corners would
+both create `(c,d)`. They share no face, and neither has an endpoint among the
+other's corners, so neither conflict relation below separates them, and
+accepting both would leave two edges keyed `(c,d)`. The `(c,d)` coordinator
+receives a query from every candidate that would create `(c,d)`, so it is the one
+rank that sees every claimant, and it resolves them in the existing round with no
+further collective. Each query carries the asker's squared length and its
+geometric pass/fail, and the reply is one of three:
+
+- **exists**: `(c,d)` is a pre-flip edge. Every asker gets it, and counts into
+  `rejectedDuplicateEdge`.
+- **free**: the best asker that passed the geometric test, by the priority
+  `(squared length DESCENDING, EdgeKey ASCENDING)` below; and every asker that
+  failed it, whose own geometric verdict rejects it next.
+- **claimed**: every other asker that passed the geometric test. It lost the new
+  edge to a higher-priority flip with no pre-flip edge in the way, so it counts
+  into `rejectedConflict`.
+
+The geometric test is therefore *evaluated* before this round, so its pass/fail
+can travel in the query, but verdicts are *attributed* in the order boundary,
+duplicate, geometric, conflict: a candidate whose new edge exists counts as a
+duplicate even if it also fails geometry. Filtering the claimants on geometry is
+what stops a winner that is about to fail its own geometric test from vetoing a
+valid flip. The claim winner can still lose the independent-set round, and the
+claimant it shut out is not reconsidered; that is the same deliberate
+non-maximality as the independent set's below, one round at one bounded cost.
+On a call in which no two geometric survivors share a new edge, nobody is
+answered *claimed*, and every verdict is what the pre-flip check alone gives.
+
 ### The independent set, and why the priority carries no gid
 
 The policy's `conflict` member chooses between two relations.

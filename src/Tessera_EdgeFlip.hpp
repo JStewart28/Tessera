@@ -148,8 +148,41 @@ namespace Tessera
 //                      answer is exact because step 1's advertisement is over
 //                      EVERY owned face's three edges, so the (c,d)
 //                      coordinator has seen the whole global edge set.
+//
+//                      The same round settles a second hazard: two candidates
+//                      (a,b | c,d) and (a',b' | c,d) with the same opposite
+//                      corners would both CREATE (c,d). They share no face and
+//                      neither has an endpoint among the other's corners, so
+//                      neither FlipConflict relation separates them, and
+//                      accepting both leaves two edges keyed (c,d). The (c,d)
+//                      coordinator receives a query from EVERY candidate that
+//                      would create (c,d), so it is the one rank that sees
+//                      every claimant, and it resolves them with no further
+//                      round. Each query carries the asker's squared length
+//                      and its GEOMETRIC pass/fail, evaluated before the
+//                      round. The reply is three-valued (detail::DupStatus):
+//                        EXISTS  -- (c,d) is a pre-flip edge; every asker gets
+//                                   it and counts into rejectedDuplicateEdge.
+//                        FREE    -- the best asker that passed geometry, by
+//                                   Decision 2's priority; and every asker
+//                                   that FAILED geometry, whose own geometric
+//                                   verdict rejects it next.
+//                        CLAIMED -- every other asker that passed geometry.
+//                                   It lost the diagonal to a higher-priority
+//                                   flip with no pre-flip edge in the way, so
+//                                   it counts into rejectedConflict.
+//                      Filtering the claimants on geometry is what stops a
+//                      winner that is about to fail its own geometric test
+//                      from vetoing a valid flip. The claim winner can still
+//                      lose step 3, and the claimant it shut out is NOT
+//                      reconsidered -- the same non-maximality as Decision 3.
 //        GEOMETRIC  -- the Policy's normal-deviation and quality tests, from
-//                      the four positions.
+//                      the four positions. They are EVALUATED before the
+//                      duplicate round, so the pass/fail can travel in its
+//                      query, but the verdicts are ATTRIBUTED in the order
+//                      listed: boundary, then duplicate, then geometric, then
+//                      conflict. A candidate whose diagonal exists counts as a
+//                      duplicate even if it also fails geometry.
 //
 //   3. INDEPENDENT SET, under the conflict relation the Policy's `conflict`
 //      member selects (FlipConflict, below). Every loser counts into
@@ -274,10 +307,12 @@ struct FlipResult
     long long rejectedDuplicateEdge = 0;
     //! Rejected: the Policy's normal-deviation or quality test failed.
     long long rejectedGeometric = 0;
-    //! Rejected: passed every test but lost the independent-set round to a
-    //! higher-priority candidate -- on one of its two faces under
-    //! FlipConflict::SharedFace, at one of its four corners under
-    //! FlipConflict::EndpointInQuad.
+    //! Rejected: passed every test but lost to a higher-priority candidate, in
+    //! one of three ways -- on one of its two faces under
+    //! FlipConflict::SharedFace; at one of its four corners under
+    //! FlipConflict::EndpointInQuad; or, under either relation, by claiming
+    //! the same new diagonal as a higher-priority candidate that passed the
+    //! geometric test.
     long long rejectedConflict = 0;
 
     //! THE FLIP MAP: (old EdgeKey, new EdgeKey) for every accepted flip this
@@ -406,18 +441,31 @@ struct FlipVerdict
     Rank owner;
 };
 
-//! "Does `target` exist as an edge?", asked by the coordinator of `asker` of
-//! the coordinator of `target`. The reply travels back over the same pairing.
+//! "May `asker` create `target`?", asked by the coordinator of `asker` of the
+//! coordinator of `target`. `len2` is the asker's priority length and `geomOk`
+//! its geometric pass/fail, so the target's coordinator can resolve several
+//! candidates claiming the same new diagonal. The reply travels back over the
+//! same pairing.
 struct DupQuery
 {
     EdgeKey target;
     EdgeKey asker;
+    double len2;
+    //! 1 if the asker passed the Policy's geometric test, 0 if it failed.
+    unsigned char geomOk;
+};
+//! The three answers to a DupQuery; the header comment's step 2 defines them.
+enum class DupStatus : unsigned char
+{
+    Free = 0,    //!< nothing in the way; the asker's own tests decide
+    Exists = 1,  //!< `target` is a pre-flip edge: rejectedDuplicateEdge
+    Claimed = 2, //!< a higher-priority geometric survivor creates `target`
 };
 //! The answer to a DupQuery, addressed by the asked-about candidate.
 struct DupReply
 {
     EdgeKey asker;
-    unsigned char exists;
+    DupStatus status;
 };
 
 //! (face, a candidate edge of it, that edge's squared length) delivered to the
@@ -659,6 +707,7 @@ FlipResult flipEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& h
         FlipVerdict edge; // the flipped edge's gid and owner
         EdgeKey newKey;   // makeEdgeKey(w, x)
         double len2;      // priority: descending
+        bool geomOk = false; // the Policy's geometric test, 2a
         int votes = 0;
     };
     std::map<EdgeKey, Cand> cand;
@@ -692,45 +741,17 @@ FlipResult flipEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& h
         cand.emplace( kv.first, c );
     }
 
-    // 2b. duplicate-edge round: ask the coordinator of the edge each flip would
-    //     CREATE whether it already exists.
-    {
-        std::vector<std::vector<DupQuery>> ask( size );
-        for ( const auto& kv : cand )
-            ask[edgeCoordRank( kv.second.newKey, size )].push_back(
-                { kv.second.newKey, kv.first } );
-        auto asked = allToAllV( comm, ask );
-        std::vector<std::vector<DupReply>> back( size );
-        for ( int s = 0; s < size; ++s )
-        {
-            const DupQuery* p = asked.from( s );
-            const int cnt = asked.count( s );
-            for ( int i = 0; i < cnt; ++i )
-                back[s].push_back(
-                    { p[i].asker, static_cast<unsigned char>(
-                                      exists.count( p[i].target ) ? 1 : 0 ) } );
-        }
-        auto answers = allToAllV( comm, back );
-        std::set<EdgeKey> duplicate;
-        for ( const auto& m : answers.data )
-            if ( m.exists )
-                duplicate.insert( m.asker );
-        for ( const EdgeKey& k : duplicate )
-        {
-            cand.erase( k );
-            ++locDup;
-        }
-    }
-
-    // 2c. geometric test, from the four positions the coordinator holds. The
+    // 2a. geometric test, from the four positions the coordinator holds. The
     //     new faces are (lo, x, w) and (hi, w, x) -- see the header comment on
     //     winding -- and the reference normal is the AREA-WEIGHTED average of
     //     the two old ones, i.e. the sum of the two unnormalized cross
     //     products, summed forward-face-first so the value does not depend on
-    //     advertisement arrival order.
-    for ( auto it = cand.begin(); it != cand.end(); )
+    //     advertisement arrival order. It is EVALUATED here so the pass/fail
+    //     can travel in 2b's query, and ATTRIBUTED in 2c, after the duplicate
+    //     verdict.
+    for ( auto& kv : cand )
     {
-        const Cand& c = it->second;
+        Cand& c = kv.second;
         const double* pLo = c.fwd->posLo;
         const double* pHi = c.fwd->posHi;
         const double* pW = c.fwd->posOpp;
@@ -752,13 +773,87 @@ FlipResult flipEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& h
         const bool okQuality =
             ( policy.quality( pLo, pX, pW ) >= policy.minQuality &&
               policy.quality( pHi, pW, pX ) >= policy.minQuality );
-        if ( okNormal && okQuality )
-            ++it;
-        else
+        c.geomOk = okNormal && okQuality;
+    }
+
+    // 2b. duplicate-edge round: ask the coordinator of the edge each flip would
+    //     CREATE whether it already exists, and let it resolve several
+    //     candidates claiming the same new edge. The header comment's step 2
+    //     defines the three replies.
+    std::set<EdgeKey> claimed;
+    {
+        std::vector<std::vector<DupQuery>> ask( size );
+        for ( const auto& kv : cand )
+            ask[edgeCoordRank( kv.second.newKey, size )].push_back(
+                { kv.second.newKey, kv.first, kv.second.len2,
+                  static_cast<unsigned char>( kv.second.geomOk ? 1 : 0 ) } );
+        auto asked = allToAllV( comm, ask );
+
+        // The best geometric survivor per target, by (squared length
+        // DESCENDING, EdgeKey ASCENDING) -- no gid anywhere.
+        std::map<EdgeKey, const DupQuery*> claim;
+        for ( const auto& m : asked.data )
+        {
+            if ( !m.geomOk || exists.count( m.target ) )
+                continue;
+            auto it = claim.find( m.target );
+            if ( it == claim.end() )
+                claim.emplace( m.target, &m );
+            else if ( m.len2 > it->second->len2 ||
+                      ( m.len2 == it->second->len2 &&
+                        m.asker < it->second->asker ) )
+                it->second = &m;
+        }
+
+        std::vector<std::vector<DupReply>> back( size );
+        for ( int s = 0; s < size; ++s )
+        {
+            const DupQuery* p = asked.from( s );
+            const int cnt = asked.count( s );
+            for ( int i = 0; i < cnt; ++i )
+            {
+                DupStatus st = DupStatus::Free;
+                if ( exists.count( p[i].target ) )
+                    st = DupStatus::Exists;
+                else if ( p[i].geomOk &&
+                          claim.at( p[i].target )->asker != p[i].asker )
+                    st = DupStatus::Claimed;
+                back[s].push_back( { p[i].asker, st } );
+            }
+        }
+        auto answers = allToAllV( comm, back );
+        std::set<EdgeKey> duplicate;
+        for ( const auto& m : answers.data )
+        {
+            if ( m.status == DupStatus::Exists )
+                duplicate.insert( m.asker );
+            else if ( m.status == DupStatus::Claimed )
+                claimed.insert( m.asker );
+        }
+        for ( const EdgeKey& k : duplicate )
+        {
+            cand.erase( k );
+            ++locDup;
+        }
+    }
+
+    // 2c. attribute the remaining verdicts in precedence order: a geometric
+    //     failure first, then a lost claim on the new edge, which counts as a
+    //     conflict. Only geometric survivors are ever answered CLAIMED.
+    for ( auto it = cand.begin(); it != cand.end(); )
+    {
+        if ( !it->second.geomOk )
         {
             it = cand.erase( it );
             ++locGeom;
         }
+        else if ( claimed.count( it->first ) )
+        {
+            it = cand.erase( it );
+            ++locConflict;
+        }
+        else
+            ++it;
     }
 
     // ---- Step 3: the independent set --------------------------------------
@@ -1033,7 +1128,8 @@ FlipResult flipEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& h
 //! flip of a conflicting pair survives. `policy.conflict` names the relation:
 //! FlipConflict::SharedFace (the default), where two flips sharing a FACE
 //! conflict, or FlipConflict::EndpointInQuad, where two flips conflict iff a
-//! vertex is an endpoint of one and any quad corner of the other. A caller
+//! vertex is an endpoint of one and any quad corner of the other. Under either
+//! relation, no two accepted flips create the same new edge. A caller
 //! wanting more progress calls again and watches `accepted`:
 //!
 //!     while ( flipEdges( mesh, halo, selection( mesh ) ).accepted > 0 ) {}

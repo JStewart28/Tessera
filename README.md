@@ -498,7 +498,9 @@ r.accepted;               // edges actually flipped
 r.rejectedBoundary;       // other than exactly two incident faces
 r.rejectedDuplicateEdge;  // the edge the flip would create already exists
 r.rejectedGeometric;      // the policy's normal-deviation or quality test failed
-r.rejectedConflict;       // lost the independent-set round
+r.rejectedConflict;       // lost the independent-set round, or lost the edge it
+                          // would create to a higher-priority flip that passed
+                          // the geometric test
 r.flipped;                // (old EdgeKey, new EdgeKey) for every flip this rank touches
 ```
 
