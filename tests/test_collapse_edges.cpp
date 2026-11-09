@@ -80,6 +80,12 @@
 //      edge-length extremes and minimum radius ratio reported per round, with
 //      the face count held inside a measured band and the quality above a
 //      measured floor.
+//  15. THE QUALITY HOOK. Case 7's spike bipyramid, one RING edge marked, and
+//      minQuality = kHookThreshold, which falls between the surviving faces'
+//      worst radius ratio and their worst mean ratio 4*sqrt(3)*area / sum(l^2).
+//      The default policy accepts the collapse; a policy deriving from it and
+//      shadowing quality() with the mean ratio rejects it as rejectedQuality,
+//      on the same mesh and the same mask.
 //
 // Runs on host (Serial) and device (default, HIP), ranks 1-5.
 
@@ -1399,6 +1405,148 @@ static int caseNormalFlip( int rank, const char* tag )
 }
 
 // ===========================================================================
+// Case 15: the quality hook
+// ===========================================================================
+//
+// THE FIXTURE is case 7's spike bipyramid with the ring edge (2,3) marked. Its
+// four surviving incident faces are two congruent pairs -- the spike faces
+// (0,3,4) and (0,11,2) and the bottom faces (1,4,3) and (1,2,11), each with the
+// merged vertex at the ring edge's midpoint -- and the spike pair is the worst
+// under both metrics. Computed from the fixture's coordinates with the
+// library's formulas, and printed by the case at full precision:
+//
+//   worst radius ratio  0.48306530887389387   (detail::flipRadiusRatio)
+//   worst mean ratio    0.46367649590853621   (4*sqrt(3)*area / sum(l^2))
+//   worst normal turn   0.19900807528636058 rad, under maxNormalRotation = 0.5
+//
+// kHookThreshold sits between the two metrics, so the radius ratio clears it
+// and the mean ratio does not. The case recomputes both from the soup and
+// asserts that before it trusts the verdicts.
+static const double kHookThreshold = 0.47;
+
+//! The mean ratio 4*sqrt(3)*area / (sum of squared sides): 1 for an equilateral
+//! triangle, 0 for a degenerate one. Not monotone in the radius ratio, which is
+//! what lets one threshold separate the two.
+static inline double meanRatio( const double* p0, const double* p1,
+                                const double* p2 )
+{
+    const double* p[3] = { p0, p1, p2 };
+    double n[3], l2 = 0.0;
+    for ( int k = 0; k < 3; ++k )
+        for ( int d = 0; d < 3; ++d )
+        {
+            const double dd = p[( k + 1 ) % 3][d] - p[k][d];
+            l2 += dd * dd;
+        }
+    const double u[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+    const double v[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+    n[0] = u[1] * v[2] - u[2] * v[1];
+    n[1] = u[2] * v[0] - u[0] * v[2];
+    n[2] = u[0] * v[1] - u[1] * v[0];
+    const double area =
+        0.5 * std::sqrt( n[0] * n[0] + n[1] * n[1] + n[2] * n[2] );
+    if ( !( l2 > 0.0 ) )
+        return 0.0;
+    return 4.0 * std::sqrt( 3.0 ) * area / l2;
+}
+
+//! The default policy with only its quality metric replaced -- the shape a
+//! consumer's policy takes.
+struct MeanRatioCollapsePolicy : DefaultCollapsePolicy
+{
+    double quality( const double* p0, const double* p1, const double* p2 ) const
+    {
+        return meanRatio( p0, p1, p2 );
+    }
+};
+
+template <class MeshT, class Exec, class Policy>
+static CollapseResult hookCollapse( const TriangleSoup<double>& soup,
+                                    const EdgeKey& k, const Policy& policy,
+                                    int& local )
+{
+    using mem = typename Exec::memory_space;
+    MeshT mesh( MPI_COMM_WORLD );
+    MeshHalo<mem> halo;
+    buildFromTriangleSoup( mesh, soup );
+    auto faceOwner = facePartitionByAxis( mesh );
+    distribute( mesh, halo, faceOwner, 2 );
+    long long V, E, F;
+    counts( mesh, V, E, F );
+    const CollapseResult res =
+        collapseEdges( mesh, halo, maskFromKeys( mesh, { k } ), policy );
+    local += checkCountersPartition( res );
+    local += checkRemovalDeltas( res );
+    if ( res.requested != 1 )
+        ++local; // the ring edge was not found
+    local += checkAll( mesh, V - res.accepted, E - 3 * res.accepted,
+                       F - 2 * res.accepted );
+    return res;
+}
+
+template <class MeshT, class Exec>
+static int caseQualityHook( int rank, const char* tag )
+{
+    const int nRing = 10;
+    const TriangleSoup<double> soup = spikeBipyramidSoup( nRing );
+    const EdgeKey k =
+        makeEdgeKey( static_cast<GlobalId>( 2 ), static_cast<GlobalId>( 3 ) );
+    int local = 0;
+
+    // THE PREMISE, from the soup: the worst surviving face's radius ratio
+    // clears kHookThreshold and its mean ratio does not.
+    double worstRR = 1e300, worstMR = 1e300;
+    {
+        const double* P = soup.positions.data();
+        double m[3];
+        for ( int d = 0; d < 3; ++d )
+            m[d] = 0.5 * ( P[3 * 2 + d] + P[3 * 3 + d] );
+        for ( std::size_t t = 0; t < soup.triangles.size(); t += 3 )
+        {
+            int hits = 0;
+            const double* q[3];
+            for ( int c = 0; c < 3; ++c )
+            {
+                const int v = soup.triangles[t + c];
+                const bool moved = ( v == 2 || v == 3 );
+                hits += moved ? 1 : 0;
+                q[c] = moved ? m : P + 3 * v;
+            }
+            if ( hits != 1 )
+                continue; // untouched, or one of the two dying faces
+            worstRR = std::min(
+                worstRR, Tessera::detail::flipRadiusRatio( q[0], q[1], q[2] ) );
+            worstMR = std::min( worstMR, meanRatio( q[0], q[1], q[2] ) );
+        }
+    }
+    if ( !( worstRR >= kHookThreshold && worstMR < kHookThreshold ) )
+        ++local; // the fixture no longer separates the two metrics
+
+    DefaultCollapsePolicy def;
+    def.minQuality = kHookThreshold;
+    MeanRatioCollapsePolicy mr;
+    mr.minQuality = kHookThreshold;
+
+    const CollapseResult rd = hookCollapse<MeshT, Exec>( soup, k, def, local );
+    if ( rd.accepted != 1 || rd.rejectedQuality != 0 )
+        ++local; // the default radius ratio clears the threshold
+    const CollapseResult rm = hookCollapse<MeshT, Exec>( soup, k, mr, local );
+    if ( rm.accepted != 0 || rm.rejectedQuality != 1 )
+        ++local; // the shadowed quality() must be the one thresholded
+
+    const int glob = gsum( MPI_COMM_WORLD, local );
+    if ( rank == 0 )
+        std::printf( "  [%s] case15 (quality hook, minQuality=%.17g) %s: worst "
+                     "radius ratio %.17g, worst mean ratio %.17g; default "
+                     "accepted=%lld rejectedQuality=%lld, mean-ratio policy "
+                     "accepted=%lld rejectedQuality=%lld\n",
+                     tag, kHookThreshold, glob == 0 ? "ok" : "FAIL", worstRR,
+                     worstMR, rd.accepted, rd.rejectedQuality, rm.accepted,
+                     rm.rejectedQuality );
+    return glob == 0 ? 0 : 1;
+}
+
+// ===========================================================================
 // Cases 8 and 9: decimation to a floor, and the round trip with split
 // ===========================================================================
 
@@ -2010,6 +2158,7 @@ static int run( int rank, int size, const char* tag )
     fails += caseDecimate<MeshT, Exec>( rank, tag );
     fails += caseRoundTrip<MeshT, Exec>( rank, tag );
     fails += caseComposed<MeshT, Exec>( rank, tag );
+    fails += caseQualityHook<MeshT, Exec>( rank, tag );
     std::fflush( stdout );
     return fails;
 }

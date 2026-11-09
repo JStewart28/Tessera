@@ -148,15 +148,76 @@ namespace Tessera
 //                      answer is exact because step 1's advertisement is over
 //                      EVERY owned face's three edges, so the (c,d)
 //                      coordinator has seen the whole global edge set.
-//        GEOMETRIC  -- the Policy's normal-deviation and quality tests, from
-//                      the four positions.
 //
-//   3. INDEPENDENT SET. Two flips sharing a FACE conflict -- that face would be
-//      rewritten twice -- and two sharing only a vertex do not. No graph
-//      traversal is needed: each face owner sees its own three edges' verdicts
-//      and keeps only the highest-priority candidate, then endorses it back
-//      through the coordinator, which accepts an edge only when BOTH of its
-//      faces endorse it.
+//                      The same round settles a second hazard: two candidates
+//                      (a,b | c,d) and (a',b' | c,d) with the same opposite
+//                      corners would both CREATE (c,d). They share no face and
+//                      neither has an endpoint among the other's corners, so
+//                      neither FlipConflict relation separates them, and
+//                      accepting both leaves two edges keyed (c,d). The (c,d)
+//                      coordinator receives a query from EVERY candidate that
+//                      would create (c,d), so it is the one rank that sees
+//                      every claimant, and it resolves them with no further
+//                      round. Each query carries the asker's squared length
+//                      and its GEOMETRIC pass/fail, evaluated before the
+//                      round. The reply is three-valued (detail::DupStatus):
+//                        EXISTS  -- (c,d) is a pre-flip edge; every asker gets
+//                                   it and counts into rejectedDuplicateEdge.
+//                        FREE    -- the best asker that passed geometry, by
+//                                   Decision 2's priority; and every asker
+//                                   that FAILED geometry, whose own geometric
+//                                   verdict rejects it next.
+//                        CLAIMED -- every other asker that passed geometry.
+//                                   It lost the diagonal to a higher-priority
+//                                   flip with no pre-flip edge in the way, so
+//                                   it counts into rejectedConflict.
+//                      Filtering the claimants on geometry is what stops a
+//                      winner that is about to fail its own geometric test
+//                      from vetoing a valid flip. The claim winner can still
+//                      lose step 3, and the claimant it shut out is NOT
+//                      reconsidered -- the same non-maximality as Decision 3.
+//        GEOMETRIC  -- the Policy's normal-deviation and quality tests, from
+//                      the four positions. They are EVALUATED before the
+//                      duplicate round, so the pass/fail can travel in its
+//                      query, but the verdicts are ATTRIBUTED in the order
+//                      listed: boundary, then duplicate, then geometric, then
+//                      conflict. A candidate whose diagonal exists counts as a
+//                      duplicate even if it also fails geometry.
+//
+//   3. INDEPENDENT SET, under the conflict relation the Policy's `conflict`
+//      member selects (FlipConflict, below). Every loser counts into
+//      rejectedConflict.
+//
+//      FlipConflict::SharedFace, THE DEFAULT. Two flips sharing a FACE conflict
+//      -- that face would be rewritten twice -- and two sharing only a vertex
+//      do not. No graph traversal is needed: each face owner sees its own three
+//      edges' verdicts and keeps only the highest-priority candidate, then
+//      endorses it back through the coordinator, which accepts an edge only
+//      when BOTH of its faces endorse it.
+//
+//      FlipConflict::EndpointInQuad. Two flips conflict iff a vertex is an
+//      ENDPOINT of one and any of the four quad CORNERS of the other; two
+//      sharing only an opposite corner do not. It is the symmetric form of a
+//      sequential valence pass that marks all four corners of each accepted
+//      flip touched and skips a later edge iff one of its OWN ENDPOINTS is
+//      touched. It implies the face relation: a flip sharing a face with
+//      another has both its endpoints among the other's corners. Each
+//      candidate is offered to the detail::vertexCoordRank coordinator of each
+//      of its four corners, tagged with the corner's ROLE -- endpoint (lo, hi)
+//      or opposite (w, x). The four corners of a manifold quad are distinct, so
+//      a candidate names each vertex once. At the coordinator of v, with B the
+//      highest-priority candidate naming v:
+//        - if B names v as an ENDPOINT, B alone is endorsed;
+//        - otherwise EVERY candidate naming v as OPPOSITE is endorsed, and none
+//          naming it as an endpoint.
+//      A candidate is accepted iff it collects all four endorsements, and the
+//      per-face round does not run.
+//
+//      WHY ENDPOINTINQUAD ACCEPTS NO CONFLICTING PAIR. Suppose accepted flips E1
+//      and E2 conflict at v, with v an endpoint of E1 and a corner of E2. E1 is
+//      endorsed at v as an endpoint, which happens only when B = E1, and then
+//      E1 is the ONLY candidate endorsed at v. E2 names v, so it needed v's
+//      endorsement too -- a contradiction.
 //
 //      DECISION 2 -- THE PRIORITY IS (squared length DESCENDING, EdgeKey
 //      ASCENDING) AND CONTAINS NO GID. Gids come from an MPI_Exscan and are
@@ -167,14 +228,15 @@ namespace Tessera
 //      pre-existing vertex gids and IS invariant, and every length is computed
 //      through edgeLen2Canonical() (Tessera_RefineClosure.hpp) so two ranks
 //      comparing the same edge get bit-identical doubles regardless of endpoint
-//      order. The pair is a total order on distinct edges, so a face can endorse
-//      at most one candidate and the accepted set is a pure function of the
-//      global mesh.
+//      order. The pair is a total order on distinct edges, so every endorsing
+//      site -- a face under SharedFace, a vertex coordinator under
+//      EndpointInQuad -- has exactly one best candidate, and the accepted set is
+//      a pure function of the global mesh under either relation.
 //
 //      The result is an independent set, NOT a maximal one: an edge that loses
-//      on face F is not reconsidered when F's winner is itself vetoed by its
-//      other face. That is deliberate (Decision 3 below) -- one round, one
-//      bounded cost.
+//      at one endorsing site is not reconsidered when that site's winner is
+//      itself vetoed at another. That is deliberate (Decision 3 below) -- one
+//      round, one bounded cost.
 //
 //   4. APPLY. Each face owner rewrites its face's Verts/Edges in place and the
 //      edge owner rewrites the flipped edge's Verts/Faces; nothing is resized.
@@ -245,8 +307,12 @@ struct FlipResult
     long long rejectedDuplicateEdge = 0;
     //! Rejected: the Policy's normal-deviation or quality test failed.
     long long rejectedGeometric = 0;
-    //! Rejected: passed every test but lost the independent-set round to a
-    //! higher-priority candidate on one of its two faces.
+    //! Rejected: passed every test but lost to a higher-priority candidate, in
+    //! one of three ways -- on one of its two faces under
+    //! FlipConflict::SharedFace; at one of its four corners under
+    //! FlipConflict::EndpointInQuad; or, under either relation, by claiming
+    //! the same new diagonal as a higher-priority candidate that passed the
+    //! geometric test.
     long long rejectedConflict = 0;
 
     //! THE FLIP MAP: (old EdgeKey, new EdgeKey) for every accepted flip this
@@ -257,17 +323,86 @@ struct FlipResult
     std::vector<std::pair<EdgeKey, EdgeKey>> flipped;
 };
 
+namespace detail
+{
+
+//! Twice the area-weighted normal of triangle (p0,p1,p2): (p1-p0) x (p2-p0).
+inline void flipTriNormal( const double* p0, const double* p1,
+                           const double* p2, double n[3] )
+{
+    const double u[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+    const double v[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+    n[0] = u[1] * v[2] - u[2] * v[1];
+    n[1] = u[2] * v[0] - u[0] * v[2];
+    n[2] = u[0] * v[1] - u[1] * v[0];
+}
+
+//! Radius ratio (inradius/circumradius) of a triangle, SCALED TO 1 for an
+//! equilateral one: 2 * (4 area^2) / (s * abc). 0 for a degenerate triangle.
+inline double flipRadiusRatio( const double* p0, const double* p1,
+                               const double* p2 )
+{
+    const double* p[3] = { p0, p1, p2 };
+    double side[3];
+    for ( int k = 0; k < 3; ++k )
+    {
+        double s = 0.0;
+        for ( int d = 0; d < 3; ++d )
+        {
+            const double dd = p[( k + 1 ) % 3][d] - p[k][d];
+            s += dd * dd;
+        }
+        side[k] = std::sqrt( s );
+    }
+    double n[3];
+    flipTriNormal( p0, p1, p2, n );
+    const double area =
+        0.5 * std::sqrt( n[0] * n[0] + n[1] * n[1] + n[2] * n[2] );
+    const double abc = side[0] * side[1] * side[2];
+    const double s = 0.5 * ( side[0] + side[1] + side[2] );
+    if ( !( abc > 0.0 ) || !( s > 0.0 ) )
+        return 0.0;
+    return 2.0 * ( 4.0 * area * area ) / ( s * abc );
+}
+
+} // end namespace detail
+
+//! Which pairs of candidate flips the independent-set round treats as
+//! conflicting (see step 3 of the header comment).
+enum class FlipConflict
+{
+    //! Two flips conflict iff they share a face.
+    SharedFace,
+    //! Two flips conflict iff a vertex is an endpoint of one and any of the
+    //! four quad corners of the other. Implies SharedFace.
+    EndpointInQuad
+};
+
 //! Geometric admissibility of a candidate flip, evaluated at the coordinator
-//! from the four corner positions of the quad.
+//! from the four corner positions of the quad, and the conflict relation of the
+//! independent-set round. Duck-typed: a consumer derives from this and shadows
+//! one member, as DefaultCollapsePolicy documents, e.g. to supply its own
+//! triangle-quality metric through quality(). A derived policy inherits
+//! `conflict`.
 struct DefaultFlipPolicy
 {
     //! Reject if either new face's normal points more than this far from the
     //! area-weighted average of the two old normals (radians). Guards against
     //! flipping a nearly-flat pair into a fold.
     double maxNormalDeviation = 0.35;
-    //! Reject if either new face's radius ratio (inradius/circumradius, scaled
-    //! to 1 for an equilateral triangle) falls below this.
+    //! Reject if either new face's quality() falls below this.
     double minQuality = 0.05;
+    //! The independent-set round's conflict relation.
+    FlipConflict conflict = FlipConflict::SharedFace;
+
+    //! Quality of triangle (p0,p1,p2), each a 3-vector, evaluated on the host.
+    //! The default is the radius ratio (detail::flipRadiusRatio): in [0,1], 1
+    //! for an equilateral triangle, 0 for a degenerate one. minQuality
+    //! thresholds whatever this returns.
+    double quality( const double* p0, const double* p1, const double* p2 ) const
+    {
+        return detail::flipRadiusRatio( p0, p1, p2 );
+    }
 };
 
 namespace detail
@@ -306,18 +441,31 @@ struct FlipVerdict
     Rank owner;
 };
 
-//! "Does `target` exist as an edge?", asked by the coordinator of `asker` of
-//! the coordinator of `target`. The reply travels back over the same pairing.
+//! "May `asker` create `target`?", asked by the coordinator of `asker` of the
+//! coordinator of `target`. `len2` is the asker's priority length and `geomOk`
+//! its geometric pass/fail, so the target's coordinator can resolve several
+//! candidates claiming the same new diagonal. The reply travels back over the
+//! same pairing.
 struct DupQuery
 {
     EdgeKey target;
     EdgeKey asker;
+    double len2;
+    //! 1 if the asker passed the Policy's geometric test, 0 if it failed.
+    unsigned char geomOk;
+};
+//! The three answers to a DupQuery; the header comment's step 2 defines them.
+enum class DupStatus : unsigned char
+{
+    Free = 0,    //!< nothing in the way; the asker's own tests decide
+    Exists = 1,  //!< `target` is a pre-flip edge: rejectedDuplicateEdge
+    Claimed = 2, //!< a higher-priority geometric survivor creates `target`
 };
 //! The answer to a DupQuery, addressed by the asked-about candidate.
 struct DupReply
 {
     EdgeKey asker;
-    unsigned char exists;
+    DupStatus status;
 };
 
 //! (face, a candidate edge of it, that edge's squared length) delivered to the
@@ -355,6 +503,36 @@ struct EdgeApply
     GlobalId f[2]; //!< the two (unchanged) incident face gids, ascending
 };
 
+//! Coordinator rank of a VERTEX gid. The gid-modulo convention every other
+//! per-vertex coordinator round in the tree uses (compact()'s closure check,
+//! checkOwnershipPartition, the valence tally in test_flip_edges), named here so
+//! the flip and collapse rounds read as coordinator rounds rather than as
+//! arithmetic.
+inline int vertexCoordRank( GlobalId g, int size )
+{
+    return static_cast<int>( g % static_cast<GlobalId>( size ) );
+}
+
+//! (a corner of a candidate's quad, that candidate, its priority length, the
+//! corner's role) delivered to the corner's VERTEX coordinator under
+//! FlipConflict::EndpointInQuad.
+struct FlipCornerOffer
+{
+    GlobalId v;
+    EdgeKey key;
+    double len2;
+    //! 1 if `v` is an endpoint of `key`, 0 if it is an opposite corner.
+    unsigned char endpoint;
+};
+
+//! A vertex coordinator's endorsement of one candidate naming that vertex,
+//! returned to the candidate's EDGE coordinator. Under
+//! FlipConflict::EndpointInQuad a candidate is accepted iff it collects four.
+struct FlipCornerVote
+{
+    EdgeKey key;
+};
+
 //! (old key, new key) for one accepted flip, delivered to every participant so
 //! FlipResult::flipped is complete on each rank that touches the flip.
 struct FlipNote
@@ -362,17 +540,6 @@ struct FlipNote
     EdgeKey oldKey;
     EdgeKey newKey;
 };
-
-//! Twice the area-weighted normal of triangle (p0,p1,p2): (p1-p0) x (p2-p0).
-inline void flipTriNormal( const double* p0, const double* p1,
-                           const double* p2, double n[3] )
-{
-    const double u[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
-    const double v[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
-    n[0] = u[1] * v[2] - u[2] * v[1];
-    n[1] = u[2] * v[0] - u[0] * v[2];
-    n[2] = u[0] * v[1] - u[1] * v[0];
-}
 
 //! Angle in radians between two vectors, or -1 if either is degenerate.
 inline double flipAngleBetween( const double a[3], const double b[3] )
@@ -384,34 +551,6 @@ inline double flipAngleBetween( const double a[3], const double b[3] )
     double c = ( a[0] * b[0] + a[1] * b[1] + a[2] * b[2] ) / ( na * nb );
     c = std::max( -1.0, std::min( 1.0, c ) );
     return std::acos( c );
-}
-
-//! Radius ratio (inradius/circumradius) of a triangle, SCALED TO 1 for an
-//! equilateral one: 2 * (4 area^2) / (s * abc). 0 for a degenerate triangle.
-inline double flipRadiusRatio( const double* p0, const double* p1,
-                               const double* p2 )
-{
-    const double* p[3] = { p0, p1, p2 };
-    double side[3];
-    for ( int k = 0; k < 3; ++k )
-    {
-        double s = 0.0;
-        for ( int d = 0; d < 3; ++d )
-        {
-            const double dd = p[( k + 1 ) % 3][d] - p[k][d];
-            s += dd * dd;
-        }
-        side[k] = std::sqrt( s );
-    }
-    double n[3];
-    flipTriNormal( p0, p1, p2, n );
-    const double area =
-        0.5 * std::sqrt( n[0] * n[0] + n[1] * n[1] + n[2] * n[2] );
-    const double abc = side[0] * side[1] * side[2];
-    const double s = 0.5 * ( side[0] + side[1] + side[2] );
-    if ( !( abc > 0.0 ) || !( s > 0.0 ) )
-        return 0.0;
-    return 2.0 * ( 4.0 * area * area ) / ( s * abc );
 }
 
 //! Implementation of flipEdges(); see the header comment for the algorithm and
@@ -568,6 +707,7 @@ FlipResult flipEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& h
         FlipVerdict edge; // the flipped edge's gid and owner
         EdgeKey newKey;   // makeEdgeKey(w, x)
         double len2;      // priority: descending
+        bool geomOk = false; // the Policy's geometric test, 2a
         int votes = 0;
     };
     std::map<EdgeKey, Cand> cand;
@@ -601,45 +741,17 @@ FlipResult flipEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& h
         cand.emplace( kv.first, c );
     }
 
-    // 2b. duplicate-edge round: ask the coordinator of the edge each flip would
-    //     CREATE whether it already exists.
-    {
-        std::vector<std::vector<DupQuery>> ask( size );
-        for ( const auto& kv : cand )
-            ask[edgeCoordRank( kv.second.newKey, size )].push_back(
-                { kv.second.newKey, kv.first } );
-        auto asked = allToAllV( comm, ask );
-        std::vector<std::vector<DupReply>> back( size );
-        for ( int s = 0; s < size; ++s )
-        {
-            const DupQuery* p = asked.from( s );
-            const int cnt = asked.count( s );
-            for ( int i = 0; i < cnt; ++i )
-                back[s].push_back(
-                    { p[i].asker, static_cast<unsigned char>(
-                                      exists.count( p[i].target ) ? 1 : 0 ) } );
-        }
-        auto answers = allToAllV( comm, back );
-        std::set<EdgeKey> duplicate;
-        for ( const auto& m : answers.data )
-            if ( m.exists )
-                duplicate.insert( m.asker );
-        for ( const EdgeKey& k : duplicate )
-        {
-            cand.erase( k );
-            ++locDup;
-        }
-    }
-
-    // 2c. geometric test, from the four positions the coordinator holds. The
+    // 2a. geometric test, from the four positions the coordinator holds. The
     //     new faces are (lo, x, w) and (hi, w, x) -- see the header comment on
     //     winding -- and the reference normal is the AREA-WEIGHTED average of
     //     the two old ones, i.e. the sum of the two unnormalized cross
     //     products, summed forward-face-first so the value does not depend on
-    //     advertisement arrival order.
-    for ( auto it = cand.begin(); it != cand.end(); )
+    //     advertisement arrival order. It is EVALUATED here so the pass/fail
+    //     can travel in 2b's query, and ATTRIBUTED in 2c, after the duplicate
+    //     verdict.
+    for ( auto& kv : cand )
     {
-        const Cand& c = it->second;
+        Cand& c = kv.second;
         const double* pLo = c.fwd->posLo;
         const double* pHi = c.fwd->posHi;
         const double* pW = c.fwd->posOpp;
@@ -659,22 +771,156 @@ FlipResult flipEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& h
                                 dp <= policy.maxNormalDeviation &&
                                 dq <= policy.maxNormalDeviation );
         const bool okQuality =
-            ( flipRadiusRatio( pLo, pX, pW ) >= policy.minQuality &&
-              flipRadiusRatio( pHi, pW, pX ) >= policy.minQuality );
-        if ( okNormal && okQuality )
-            ++it;
-        else
+            ( policy.quality( pLo, pX, pW ) >= policy.minQuality &&
+              policy.quality( pHi, pW, pX ) >= policy.minQuality );
+        c.geomOk = okNormal && okQuality;
+    }
+
+    // 2b. duplicate-edge round: ask the coordinator of the edge each flip would
+    //     CREATE whether it already exists, and let it resolve several
+    //     candidates claiming the same new edge. The header comment's step 2
+    //     defines the three replies.
+    std::set<EdgeKey> claimed;
+    {
+        std::vector<std::vector<DupQuery>> ask( size );
+        for ( const auto& kv : cand )
+            ask[edgeCoordRank( kv.second.newKey, size )].push_back(
+                { kv.second.newKey, kv.first, kv.second.len2,
+                  static_cast<unsigned char>( kv.second.geomOk ? 1 : 0 ) } );
+        auto asked = allToAllV( comm, ask );
+
+        // The best geometric survivor per target, by (squared length
+        // DESCENDING, EdgeKey ASCENDING) -- no gid anywhere.
+        std::map<EdgeKey, const DupQuery*> claim;
+        for ( const auto& m : asked.data )
+        {
+            if ( !m.geomOk || exists.count( m.target ) )
+                continue;
+            auto it = claim.find( m.target );
+            if ( it == claim.end() )
+                claim.emplace( m.target, &m );
+            else if ( m.len2 > it->second->len2 ||
+                      ( m.len2 == it->second->len2 &&
+                        m.asker < it->second->asker ) )
+                it->second = &m;
+        }
+
+        std::vector<std::vector<DupReply>> back( size );
+        for ( int s = 0; s < size; ++s )
+        {
+            const DupQuery* p = asked.from( s );
+            const int cnt = asked.count( s );
+            for ( int i = 0; i < cnt; ++i )
+            {
+                DupStatus st = DupStatus::Free;
+                if ( exists.count( p[i].target ) )
+                    st = DupStatus::Exists;
+                else if ( p[i].geomOk &&
+                          claim.at( p[i].target )->asker != p[i].asker )
+                    st = DupStatus::Claimed;
+                back[s].push_back( { p[i].asker, st } );
+            }
+        }
+        auto answers = allToAllV( comm, back );
+        std::set<EdgeKey> duplicate;
+        for ( const auto& m : answers.data )
+        {
+            if ( m.status == DupStatus::Exists )
+                duplicate.insert( m.asker );
+            else if ( m.status == DupStatus::Claimed )
+                claimed.insert( m.asker );
+        }
+        for ( const EdgeKey& k : duplicate )
+        {
+            cand.erase( k );
+            ++locDup;
+        }
+    }
+
+    // 2c. attribute the remaining verdicts in precedence order: a geometric
+    //     failure first, then a lost claim on the new edge, which counts as a
+    //     conflict. Only geometric survivors are ever answered CLAIMED.
+    for ( auto it = cand.begin(); it != cand.end(); )
+    {
+        if ( !it->second.geomOk )
         {
             it = cand.erase( it );
             ++locGeom;
         }
+        else if ( claimed.count( it->first ) )
+        {
+            it = cand.erase( it );
+            ++locConflict;
+        }
+        else
+            ++it;
     }
 
     // ---- Step 3: the independent set --------------------------------------
     //
-    // Offer each surviving candidate to BOTH its face owners; a face keeps the
-    // highest-priority candidate among its own edges and endorses only that
-    // one; a candidate is accepted iff it collects both endorsements.
+    // EndpointInQuad: offer each surviving candidate to the coordinator of each
+    // of its four corners, tagged with the corner's role; the header comment
+    // states the endorsement rule and why it accepts no conflicting pair; a
+    // candidate is accepted iff it collects four endorsements.
+    //
+    // SharedFace: offer each surviving candidate to BOTH its face owners; a
+    // face keeps the highest-priority candidate among its own edges and
+    // endorses only that one; a candidate is accepted iff it collects both
+    // endorsements.
+    if ( policy.conflict == FlipConflict::EndpointInQuad )
+    {
+        std::vector<std::vector<FlipCornerOffer>> offer( size );
+        for ( const auto& kv : cand )
+        {
+            const GlobalId corner[4] = { kv.first.id[0], kv.first.id[1],
+                                         kv.second.fwd->oppGid,
+                                         kv.second.bwd->oppGid };
+            for ( int j = 0; j < 4; ++j )
+                offer[vertexCoordRank( corner[j], size )].push_back(
+                    { corner[j], kv.first, kv.second.len2,
+                      static_cast<unsigned char>( j < 2 ? 1 : 0 ) } );
+        }
+        auto offers = allToAllV( comm, offer );
+
+        // (squared length DESCENDING, EdgeKey ASCENDING) -- no gid anywhere.
+        std::map<GlobalId, const FlipCornerOffer*> best;
+        for ( const auto& m : offers.data )
+        {
+            auto it = best.find( m.v );
+            if ( it == best.end() )
+                best.emplace( m.v, &m );
+            else if ( m.len2 > it->second->len2 ||
+                      ( m.len2 == it->second->len2 &&
+                        m.key < it->second->key ) )
+                it->second = &m;
+        }
+        std::vector<std::vector<FlipCornerVote>> vote( size );
+        for ( const auto& m : offers.data )
+        {
+            const FlipCornerOffer* b = best.at( m.v );
+            const bool endorse = b->endpoint ? ( &m == b ) : !m.endpoint;
+            if ( endorse )
+                vote[edgeCoordRank( m.key, size )].push_back( { m.key } );
+        }
+        auto votes = allToAllV( comm, vote );
+        for ( const auto& m : votes.data )
+        {
+            auto it = cand.find( m.key );
+            if ( it != cand.end() )
+                ++it->second.votes;
+        }
+        for ( auto it = cand.begin(); it != cand.end(); )
+        {
+            if ( it->second.votes == 4 )
+                ++it;
+            else
+            {
+                it = cand.erase( it );
+                ++locConflict;
+            }
+        }
+    }
+    else
     {
         std::vector<std::vector<FaceCand>> offer( size );
         for ( const auto& kv : cand )
@@ -878,9 +1124,13 @@ FlipResult flipEdgesImpl( MeshT& mesh, MeshHalo<typename MeshT::memory_space>& h
 //! its gid with new endpoints and the two faces keep theirs with new corners.
 //! A gid therefore no longer determines a key across this call.
 //!
-//! AT MOST AN INDEPENDENT SET IS APPLIED PER CALL -- two flips sharing a FACE
-//! conflict and only the higher-priority one survives, so a caller wanting more
-//! progress calls again and watches `accepted`:
+//! AT MOST AN INDEPENDENT SET IS APPLIED PER CALL, and only the higher-priority
+//! flip of a conflicting pair survives. `policy.conflict` names the relation:
+//! FlipConflict::SharedFace (the default), where two flips sharing a FACE
+//! conflict, or FlipConflict::EndpointInQuad, where two flips conflict iff a
+//! vertex is an endpoint of one and any quad corner of the other. Under either
+//! relation, no two accepted flips create the same new edge. A caller
+//! wanting more progress calls again and watches `accepted`:
 //!
 //!     while ( flipEdges( mesh, halo, selection( mesh ) ).accepted > 0 ) {}
 //!

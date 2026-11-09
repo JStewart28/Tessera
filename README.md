@@ -498,19 +498,49 @@ r.accepted;               // edges actually flipped
 r.rejectedBoundary;       // other than exactly two incident faces
 r.rejectedDuplicateEdge;  // the edge the flip would create already exists
 r.rejectedGeometric;      // the policy's normal-deviation or quality test failed
-r.rejectedConflict;       // lost the independent-set round
+r.rejectedConflict;       // lost the independent-set round, or lost the edge it
+                          // would create to a higher-priority flip that passed
+                          // the geometric test
 r.flipped;                // (old EdgeKey, new EdgeKey) for every flip this rank touches
 ```
 
 The five verdict counters **partition** `requested`. `DefaultFlipPolicy` has two
-knobs: `maxNormalDeviation` (radians) rejects a flip either of whose new faces
-points more than that far from the area-weighted average of the two old normals,
-which is what stops a nearly-flat pair being folded; and `minQuality` rejects a
-flip either of whose new faces has a radius ratio (inradius/circumradius,
-**scaled to 1 for an equilateral triangle**) below it. Note the scaling — the
-same quantity is conventionally quoted as 0.5 for an equilateral triangle, so a
-`minQuality` of 0.05 is a floor of 0.025 in the unscaled convention that
-`tests/MeshInvariants.hpp`'s `minRadiusRatio()` reports.
+knobs and one hook: `maxNormalDeviation` (radians) rejects a flip either of whose
+new faces points more than that far from the area-weighted average of the two old
+normals, which is what stops a nearly-flat pair being folded; and `minQuality`
+rejects a flip either of whose new faces scores below it on
+`quality( p0, p1, p2 )`. The default `quality` is the radius ratio
+(inradius/circumradius, **scaled to 1 for an equilateral triangle**). Note the
+scaling — the same quantity is conventionally quoted as 0.5 for an equilateral
+triangle, so a `minQuality` of 0.05 is a floor of 0.025 in the unscaled
+convention that `tests/MeshInvariants.hpp`'s `minRadiusRatio()` reports.
+
+```cpp
+struct DefaultFlipPolicy
+{
+    double maxNormalDeviation = 0.35;  // radians
+    double minQuality = 0.05;          // thresholds quality()
+    FlipConflict conflict = FlipConflict::SharedFace;  // independent-set relation
+
+    // Host; p0..p2 are 3-vectors. Radius ratio, in [0,1], 1 = equilateral.
+    double quality( const double* p0, const double* p1,
+                    const double* p2 ) const;
+};
+```
+
+To threshold a different metric, derive and shadow `quality` — the same pattern
+as `DefaultCollapsePolicy` below:
+
+```cpp
+struct MeanRatioFlipPolicy : Tessera::DefaultFlipPolicy
+{
+    // 4*sqrt(3)*area / (sum of squared sides): 1 for an equilateral triangle.
+    double quality( const double* p0, const double* p1, const double* p2 ) const
+    {
+        return mean_ratio( p0, p1, p2 );
+    }
+};
+```
 
 Three decisions a caller has to know about:
 
@@ -533,10 +563,27 @@ evaluable from the two incident faces, which the edge's coordinator supplies.
 Pulling valence inside would force depth 2 and hard-code one selection criterion
 into a general operation.
 
-**At most an independent set is applied per call.** Two flips sharing a *face*
-conflict — that face would be rewritten twice — and only the higher-priority one
-survives; two sharing only a vertex do not conflict. Iterating internally would
-hide an unbounded number of collectives behind one call, so **the caller loops**:
+**At most an independent set is applied per call**, and of two conflicting flips
+only the higher-priority one survives. The policy's `conflict` member chooses the
+relation:
+
+- `FlipConflict::SharedFace`, the default. Two flips sharing a *face* conflict —
+  that face would be rewritten twice — and two sharing only a vertex do not.
+- `FlipConflict::EndpointInQuad`. Two flips conflict iff a vertex is an
+  *endpoint* of one and any of the four quad *corners* of the other; two sharing
+  only an opposite corner do not. It is the symmetric form of a sequential
+  valence pass that marks all four corners of each accepted flip touched and
+  skips a later edge whose own endpoint is touched, and it implies `SharedFace`.
+
+```cpp
+DefaultFlipPolicy valence;
+valence.conflict = FlipConflict::EndpointInQuad;
+FlipResult r = flipEdges( mesh, halo, valenceMask, valence );
+```
+
+A policy deriving from `DefaultFlipPolicy` inherits `conflict`. Iterating
+internally would hide an unbounded number of collectives behind one call, so
+**the caller loops**:
 
 ```cpp
 for ( int round = 0; round < maxRounds; ++round )
@@ -548,8 +595,8 @@ for ( int round = 0; round < maxRounds; ++round )
 
 which is also what lets the caller re-derive valences between rounds. The
 priority is `(squared length descending, EdgeKey ascending)` and contains **no
-gid**, so the accepted set is a pure function of the global mesh and is identical
-at every rank count.
+gid**, so under either relation the accepted set is a pure function of the global
+mesh and is identical at every rank count.
 
 Because the independent set is not a serial shortest-first sweep, **the flip set
 differs from a serial pass and both are valid** — a consumer must compare quality
@@ -601,15 +648,18 @@ r.collapsed;               // EdgeKey of every accepted collapse this rank touch
 ```
 
 The five verdict counters **partition** `requested`. `DefaultCollapsePolicy` has
-three knobs and two hooks:
+three knobs and three hooks:
 
 ```cpp
 struct DefaultCollapsePolicy
 {
     double t = 0.5;                  // 0 keeps a, 1 keeps b, a = the LOWER-gid endpoint
     double maxNormalRotation = 0.5;  // radians; the fold guard
-    double minQuality = 0.05;        // radius ratio, 1 for an equilateral triangle
+    double minQuality = 0.05;        // thresholds quality()
 
+    // Host; p0..p2 are 3-vectors. Radius ratio, in [0,1], 1 = equilateral.
+    double quality( const double* p0, const double* p1,
+                    const double* p2 ) const;
     void interpolatePosition( double* out, const double* a, const double* b,
                               double t, int dim ) const;         // (1-t)a + t b
     template <std::size_t M>
@@ -617,9 +667,14 @@ struct DefaultCollapsePolicy
 };
 ```
 
-`minQuality` is in the convention where an equilateral triangle scores **1**, the
-same as `DefaultFlipPolicy::minQuality`, so 0.05 is a floor of 0.025 in the
-unscaled convention `tests/MeshInvariants.hpp`'s `minRadiusRatio()` reports.
+`minQuality` rejects a collapse if any surviving incident face, with the merged
+corner in place, scores below it on `quality`. The default `quality` is the same
+radius ratio `DefaultFlipPolicy::quality` returns, in the convention where an
+equilateral triangle scores **1**, so 0.05 is a floor of 0.025 in the unscaled
+convention `tests/MeshInvariants.hpp`'s `minRadiusRatio()` reports. Shadow
+`quality` in a derived policy to threshold a different metric; the test needs
+both endpoints' full one-rings, which only `collapseEdges()`' vertex coordinator
+assembles, so a caller cannot evaluate it while building the mask.
 
 **The hooks carry `t`, and that is why this is a separate policy from
 `DefaultRefinePolicy`.** `DefaultRefinePolicy::interpolatePosition( mid, a, b,

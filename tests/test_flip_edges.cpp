@@ -66,6 +66,31 @@
 //      rounds of valence flips, five times over. Euler == 2 and conformity
 //      after every operation, and the minimum radius ratio stays above a floor
 //      MEASURED in the first implementation run (see kMinRadiusRatioFloor).
+//  13. THE QUALITY HOOK. A flat-topped hexagonal bipyramid, one spoke marked,
+//      and minQuality = kHookThreshold, which falls between the two new faces'
+//      worst radius ratio and their worst mean ratio 4*sqrt(3)*area / sum(l^2).
+//      The default policy rejects the flip as rejectedGeometric; a policy
+//      deriving from it and shadowing quality() with the mean ratio accepts it,
+//      on the same mesh and the same mask.
+//  14. THE ENDPOINT-IN-QUAD CONFLICT RELATION. Under FlipConflict::
+//      EndpointInQuad no accepted flip's endpoint is a corner of another
+//      accepted flip -- checked from the gathered flip map, whose (old key,
+//      new key) pairs give each flip's endpoints and opposite corners. On a
+//      two-ring bipyramid: two flips sharing only an opposite corner are both
+//      accepted; two pairs, sharing no face but each with one flip's endpoint
+//      among the other's corners, are accepted whole by SharedFace and lose
+//      exactly one flip to rejectedConflict under EndpointInQuad, one pair
+//      through each branch of the endorsement rule. On the icosphere with every
+//      edge marked, the accepted set equals the MPI_COMM_SELF one.
+//  15. NO TWO ACCEPTED FLIPS CREATE THE SAME DIAGONAL. On the flat bipyramid,
+//      ring edges (2,3) and (5,6) both have opposite corners 0 and 1, share no
+//      face, and have no endpoint among each other's corners, so only the
+//      claim on the new diagonal (0,1) separates them. Under both relations
+//      exactly one is accepted and the other counts into rejectedConflict;
+//      the winner is the priority's pick and equals the MPI_COMM_SELF one, and
+//      checkKeyTables finds no duplicate key. On a copy with ring vertex 5
+//      pushed outward, the higher-priority (5,6) fails geometry and does not
+//      veto (2,3): one accepted, one rejectedGeometric, no conflict.
 //
 // Runs on host (Serial) and device (default, HIP), ranks 1-5.
 
@@ -1090,6 +1115,659 @@ static int caseGeometricRejection( int rank, const char* tag )
     return glob == 0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// Case 13's fixture: a FLAT-TOPPED HEXAGONAL BIPYRAMID.
+// ---------------------------------------------------------------------------
+//
+// A unit hexagonal ring at z = 0, the top apex 0 at z = 0.1 and the bottom apex
+// 1 at z = -1; ring vertex i is gid 2 + i. Flipping the spoke (0,2) replaces the
+// two top faces on it with the shallow top face (0,7,3) and the ring triangle
+// (2,3,7), whose 120-degree corner makes it an obtuse CAP -- the shape on which
+// the radius ratio falls well below the mean ratio. Computed from these
+// coordinates with the library's formulas, and printed by the case at full
+// precision:
+//
+//   worst radius ratio  0.46410161513775444   (detail::flipRadiusRatio)
+//   worst mean ratio    0.59999999999999987   (4*sqrt(3)*area / sum(l^2))
+//   normal deviations   0.0977 and 0.0997 rad, under maxNormalDeviation = 0.35
+//
+// Both worsts are the ring triangle's. (3,7) is not an edge, so the duplicate
+// test passes and the geometric test alone decides.
+static const double kHookThreshold = 0.55;
+
+static TriangleSoup<double> flatBipyramidSoup( EdgeKey& flipMe )
+{
+    const int n = 6;
+    TriangleSoup<double> soup;
+    auto push = [&]( double x, double y, double z )
+    {
+        soup.positions.push_back( x );
+        soup.positions.push_back( y );
+        soup.positions.push_back( z );
+    };
+    push( 0.0, 0.0, 0.1 );
+    push( 0.0, 0.0, -1.0 );
+    for ( int i = 0; i < n; ++i )
+    {
+        const double a = 2.0 * 3.14159265358979323846 * i / n;
+        push( std::cos( a ), std::sin( a ), 0.0 );
+    }
+    for ( int i = 0; i < n; ++i )
+    {
+        // Top faces CCW seen from above, bottom faces the other way, so the
+        // surface is consistently oriented.
+        const int r0 = 2 + i, r1 = 2 + ( i + 1 ) % n;
+        const int top[3] = { 0, r0, r1 };
+        const int bot[3] = { 1, r1, r0 };
+        for ( int k = 0; k < 3; ++k )
+            soup.triangles.push_back( top[k] );
+        for ( int k = 0; k < 3; ++k )
+            soup.triangles.push_back( bot[k] );
+    }
+    flipMe = makeEdgeKey( static_cast<GlobalId>( 0 ),
+                          static_cast<GlobalId>( 2 ) );
+    return soup;
+}
+
+//! The mean ratio 4*sqrt(3)*area / (sum of squared sides): 1 for an equilateral
+//! triangle, 0 for a degenerate one. Not monotone in the radius ratio, which is
+//! what lets one threshold separate the two.
+static inline double meanRatio( const double* p0, const double* p1,
+                                const double* p2 )
+{
+    const double* p[3] = { p0, p1, p2 };
+    double n[3], l2 = 0.0;
+    for ( int k = 0; k < 3; ++k )
+        for ( int d = 0; d < 3; ++d )
+        {
+            const double dd = p[( k + 1 ) % 3][d] - p[k][d];
+            l2 += dd * dd;
+        }
+    const double u[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+    const double v[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+    n[0] = u[1] * v[2] - u[2] * v[1];
+    n[1] = u[2] * v[0] - u[0] * v[2];
+    n[2] = u[0] * v[1] - u[1] * v[0];
+    const double area =
+        0.5 * std::sqrt( n[0] * n[0] + n[1] * n[1] + n[2] * n[2] );
+    if ( !( l2 > 0.0 ) )
+        return 0.0;
+    return 4.0 * std::sqrt( 3.0 ) * area / l2;
+}
+
+//! The default policy with only its quality metric replaced -- the shape a
+//! consumer's policy takes.
+struct MeanRatioFlipPolicy : DefaultFlipPolicy
+{
+    double quality( const double* p0, const double* p1, const double* p2 ) const
+    {
+        return meanRatio( p0, p1, p2 );
+    }
+};
+
+template <class MeshT, class Exec, class Policy>
+static FlipResult hookFlip( const TriangleSoup<double>& soup, const EdgeKey& k,
+                            const Policy& policy, int& local )
+{
+    using mem = typename Exec::memory_space;
+    MeshT mesh( MPI_COMM_WORLD );
+    MeshHalo<mem> halo;
+    buildFromTriangleSoup( mesh, soup );
+    auto faceOwner = facePartitionByAxis( mesh );
+    distribute( mesh, halo, faceOwner );
+    long long V, E, F;
+    counts( mesh, V, E, F );
+    if ( V != 8 || E != 18 || F != 12 )
+        ++local; // fixture drifted
+    const FlipResult res =
+        flipEdges( mesh, halo, maskFromKeys( mesh, { k } ), policy );
+    local += checkAll( mesh, V, E, F );
+    local += checkCountersPartition( res );
+    if ( res.requested != 1 )
+        ++local; // the spoke was not found
+    if ( res.rejectedBoundary != 0 || res.rejectedDuplicateEdge != 0 )
+        ++local; // only the geometric test may decide
+    local += TesseraTest::checkKeyTables( mesh );
+    return res;
+}
+
+//! Case 13: the policy's quality() is the metric minQuality thresholds.
+template <class MeshT, class Exec>
+static int caseQualityHook( int rank, const char* tag )
+{
+    EdgeKey k;
+    const TriangleSoup<double> soup = flatBipyramidSoup( k );
+    int local = 0;
+
+    // THE PREMISE, from the soup: the new faces (lo,x,w) = (0,7,3) and
+    // (hi,w,x) = (2,3,7). Their worst mean ratio clears kHookThreshold and
+    // their worst radius ratio does not.
+    double worstRR = 1e300, worstMR = 1e300;
+    {
+        const double* P = soup.positions.data();
+        const int nf[2][3] = { { 0, 7, 3 }, { 2, 3, 7 } };
+        for ( const auto& f : nf )
+        {
+            const double* q0 = P + 3 * f[0];
+            const double* q1 = P + 3 * f[1];
+            const double* q2 = P + 3 * f[2];
+            worstRR = std::min(
+                worstRR, Tessera::detail::flipRadiusRatio( q0, q1, q2 ) );
+            worstMR = std::min( worstMR, meanRatio( q0, q1, q2 ) );
+        }
+    }
+    if ( !( worstMR >= kHookThreshold && worstRR < kHookThreshold ) )
+        ++local; // the fixture no longer separates the two metrics
+
+    DefaultFlipPolicy def;
+    def.minQuality = kHookThreshold;
+    MeanRatioFlipPolicy mr;
+    mr.minQuality = kHookThreshold;
+
+    const FlipResult rd = hookFlip<MeshT, Exec>( soup, k, def, local );
+    if ( rd.accepted != 0 || rd.rejectedGeometric != 1 )
+        ++local; // the default radius ratio fails the threshold
+    const FlipResult rm = hookFlip<MeshT, Exec>( soup, k, mr, local );
+    if ( rm.accepted != 1 || rm.rejectedGeometric != 0 )
+        ++local; // the shadowed quality() must be the one thresholded
+
+    const int glob = gsum( MPI_COMM_WORLD, local );
+    if ( rank == 0 )
+        std::printf( "  [%s] case13 (quality hook, minQuality=%.17g) %s: worst "
+                     "radius ratio %.17g, worst mean ratio %.17g; default "
+                     "accepted=%lld rejectedGeometric=%lld, mean-ratio policy "
+                     "accepted=%lld rejectedGeometric=%lld\n",
+                     tag, kHookThreshold, glob == 0 ? "ok" : "FAIL", worstRR,
+                     worstMR, rd.accepted, rd.rejectedGeometric, rm.accepted,
+                     rm.rejectedGeometric );
+    return glob == 0 ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// Case 14's fixture: a TWO-RING BIPYRAMID.
+// ---------------------------------------------------------------------------
+//
+// Top apex T = 0 at z = 1.5 and bottom apex B = 1 at z = -0.6; an upper ring
+// R_i = 2 + i of radius 1 at z = 0.5 and a lower ring S_i = 10 + i of radius 0.6
+// at z = -0.5, i = 0..7, both at angle 2*pi*i/8. T fans over R, B fans under S,
+// and the band splits each trapezoid (R_i, R_i+1, S_i+1, S_i) on the diagonal
+// (R_i+1, S_i). The solid is convex and contains the origin, so each triangle
+// is wound outward by the sign of its normal against its centroid. V 18, E 48,
+// F 32.
+//
+// The four edges the case marks, with endpoints | opposite corners and squared
+// length:
+//
+//   ring  (R0,R1) = (2,3)   | T, S0 = 0, 10    2 - sqrt(2) = 0.586
+//   ring  (R4,R5) = (6,7)   | T, S4 = 0, 14    0.586
+//   spoke (T,R4)  = (0,6)   | R3, R5 = 5, 7    2
+//   spoke (B,S0)  = (1,10)  | S7, S1 = 17, 11  0.37
+//
+// and the three pairs it marks, no pair sharing a face:
+//
+//   shared opposite -- (2,3) + (6,7) share only the opposite corner T. No
+//     conflict under either relation, so both are accepted: EndpointInQuad is
+//     not plain vertex disjointness.
+//   endpoint wins   -- (2,3) + (0,6). T is an endpoint of the spoke and an
+//     opposite corner of the ring edge. The best candidate at T is the longer
+//     spoke, which names T as an endpoint, so it alone is endorsed there.
+//   opposite wins   -- (2,3) + (1,10). S0 is an endpoint of the spoke and an
+//     opposite corner of the ring edge. The best candidate at S0 is the longer
+//     ring edge, which names S0 as opposite, so the spoke is not endorsed.
+//
+// No flip creates an existing edge, and the case uses the permissive policy
+// {maxNormalDeviation = pi, minQuality = 0}, so the independent-set round alone
+// decides. A Python model of both relations on this soup gives the same
+// accepted sets the case asserts.
+static TriangleSoup<double> twoRingBipyramidSoup()
+{
+    const int n = 8;
+    const double twoPi = 2.0 * 3.14159265358979323846;
+    TriangleSoup<double> soup;
+    auto push = [&]( double x, double y, double z )
+    {
+        soup.positions.push_back( x );
+        soup.positions.push_back( y );
+        soup.positions.push_back( z );
+    };
+    push( 0.0, 0.0, 1.5 );
+    push( 0.0, 0.0, -0.6 );
+    for ( int i = 0; i < n; ++i )
+        push( std::cos( twoPi * i / n ), std::sin( twoPi * i / n ), 0.5 );
+    for ( int i = 0; i < n; ++i )
+        push( 0.6 * std::cos( twoPi * i / n ), 0.6 * std::sin( twoPi * i / n ),
+              -0.5 );
+
+    auto tri = [&]( int a, int b, int c )
+    {
+        const double* p = soup.positions.data();
+        double u[3], v[3], nrm[3], dot = 0.0;
+        for ( int d = 0; d < 3; ++d )
+        {
+            u[d] = p[3 * b + d] - p[3 * a + d];
+            v[d] = p[3 * c + d] - p[3 * a + d];
+        }
+        nrm[0] = u[1] * v[2] - u[2] * v[1];
+        nrm[1] = u[2] * v[0] - u[0] * v[2];
+        nrm[2] = u[0] * v[1] - u[1] * v[0];
+        for ( int d = 0; d < 3; ++d )
+            dot += nrm[d] * ( p[3 * a + d] + p[3 * b + d] + p[3 * c + d] );
+        if ( dot < 0.0 )
+            std::swap( b, c );
+        soup.triangles.push_back( a );
+        soup.triangles.push_back( b );
+        soup.triangles.push_back( c );
+    };
+    for ( int i = 0; i < n; ++i )
+    {
+        const int r0 = 2 + i, r1 = 2 + ( i + 1 ) % n;
+        const int s0 = 10 + i, s1 = 10 + ( i + 1 ) % n;
+        tri( 0, r0, r1 );
+        tri( 1, s1, s0 );
+        tri( r0, r1, s0 );
+        tri( r1, s1, s0 );
+    }
+    return soup;
+}
+
+//! The number of ORDERED pairs (E1, E2) of distinct flips in `flips` with an
+//! endpoint of E1 among the four corners of E2 -- the pairs EndpointInQuad
+//! forbids. A flip's corners are its old key's ids and its new key's ids.
+static long long endpointInQuadViolations(
+    const std::set<std::pair<EdgeKey, EdgeKey>>& flips )
+{
+    std::map<GlobalId, long long> endpointOf;
+    for ( const auto& kv : flips )
+        for ( int j = 0; j < 2; ++j )
+            ++endpointOf[kv.first.id[j]];
+    long long bad = 0;
+    for ( const auto& kv : flips )
+    {
+        const GlobalId corner[4] = { kv.first.id[0], kv.first.id[1],
+                                     kv.second.id[0], kv.second.id[1] };
+        for ( int j = 0; j < 4; ++j )
+        {
+            auto it = endpointOf.find( corner[j] );
+            if ( it != endpointOf.end() )
+                bad += it->second - ( j < 2 ? 1 : 0 ); // not itself
+        }
+    }
+    return bad;
+}
+
+//! One flipEdges() under `mode` with the permissive policy, on the case-14 soup
+//! with `marked` marked, or (soup == nullptr) on the subdiv-2 icosphere with
+//! every owned edge marked. Returns the result and the global flip set.
+template <class MeshT, class Exec>
+static FlipResult conflictRun( MPI_Comm comm, const TriangleSoup<double>* soup,
+                               const std::set<EdgeKey>& marked,
+                               FlipConflict mode,
+                               std::set<std::pair<EdgeKey, EdgeKey>>& flips,
+                               int& local )
+{
+    using mem = typename Exec::memory_space;
+    MeshT mesh( comm );
+    MeshHalo<mem> halo;
+    if ( soup )
+    {
+        buildFromTriangleSoup( mesh, *soup );
+        auto faceOwner = facePartitionByAxis( mesh );
+        distribute( mesh, halo, faceOwner );
+    }
+    else
+        setupOn<MeshT, Exec>( comm, mesh, halo );
+
+    long long V, E, F;
+    counts( mesh, V, E, F );
+    if ( soup ? ( V != 18 || E != 48 || F != 32 )
+              : ( V != V0 || E != E0 || F != F0 ) )
+        ++local; // fixture drifted
+
+    DefaultFlipPolicy policy;
+    policy.maxNormalDeviation = std::acos( -1.0 );
+    policy.minQuality = 0.0;
+    policy.conflict = mode;
+    const std::vector<char> mask =
+        soup ? maskFromKeys( mesh, marked )
+             : std::vector<char>( mesh.numOwnedEdges(), 1 );
+    const FlipResult res = flipEdges( mesh, halo, mask, policy );
+
+    local += checkAll( mesh, V, E, F );
+    local += checkCountersPartition( res );
+    local += TesseraTest::checkKeyTables( mesh );
+    flips = globalFlipSet( comm, res );
+    if ( static_cast<long long>( flips.size() ) != res.accepted )
+        ++local; // the flip map is not complete/consistent
+    return res;
+}
+
+static std::string keyStr( const EdgeKey& k )
+{
+    return "(" + std::to_string( static_cast<unsigned long long>( k.id[0] ) ) +
+           "," + std::to_string( static_cast<unsigned long long>( k.id[1] ) ) +
+           ")";
+}
+
+//! Case 14: FlipConflict::EndpointInQuad accepts no pair in which an endpoint
+//! of one flip is a corner of another, accepts two flips sharing only an
+//! opposite corner, and rejects exactly one of a pair that SharedFace accepts
+//! whole. The accepted sets are rank-count invariant.
+template <class MeshT, class Exec>
+static int caseEndpointInQuad( int rank, int size, const char* tag )
+{
+    using FlipSet = std::set<std::pair<EdgeKey, EdgeKey>>;
+    int local = 0;
+    const TriangleSoup<double> soup = twoRingBipyramidSoup();
+    auto key = []( int a, int b )
+    {
+        return makeEdgeKey( static_cast<GlobalId>( a ),
+                            static_cast<GlobalId>( b ) );
+    };
+
+    struct Pair
+    {
+        const char* name;
+        EdgeKey a, b;
+        std::set<EdgeKey> eiqAccepted; // expected under EndpointInQuad
+    };
+    const Pair pairs[3] = {
+        { "shared opposite", key( 2, 3 ), key( 6, 7 ),
+          { key( 2, 3 ), key( 6, 7 ) } },
+        { "endpoint wins", key( 2, 3 ), key( 0, 6 ), { key( 0, 6 ) } },
+        { "opposite wins", key( 2, 3 ), key( 1, 10 ), { key( 2, 3 ) } } };
+
+    for ( const Pair& p : pairs )
+    {
+        const std::set<EdgeKey> marked = { p.a, p.b };
+        FlipSet sfSet, eiqSet;
+        const FlipResult sf = conflictRun<MeshT, Exec>(
+            MPI_COMM_WORLD, &soup, marked, FlipConflict::SharedFace, sfSet,
+            local );
+        const FlipResult eiq = conflictRun<MeshT, Exec>(
+            MPI_COMM_WORLD, &soup, marked, FlipConflict::EndpointInQuad,
+            eiqSet, local );
+
+        std::set<EdgeKey> sfKeys, eiqKeys;
+        for ( const auto& kv : sfSet )
+            sfKeys.insert( kv.first );
+        for ( const auto& kv : eiqSet )
+            eiqKeys.insert( kv.first );
+
+        for ( const FlipResult* r : { &sf, &eiq } )
+            if ( r->requested != 2 || r->rejectedBoundary != 0 ||
+                 r->rejectedDuplicateEdge != 0 || r->rejectedGeometric != 0 )
+                ++local; // only the independent-set round may decide
+        // No pair shares a face, so SharedFace accepts both.
+        if ( sf.accepted != 2 || sf.rejectedConflict != 0 || sfKeys != marked )
+            ++local;
+        if ( eiqKeys != p.eiqAccepted )
+            ++local;
+        if ( eiq.accepted != static_cast<long long>( p.eiqAccepted.size() ) ||
+             eiq.rejectedConflict != 2 - eiq.accepted )
+            ++local;
+        const long long sfBad = endpointInQuadViolations( sfSet );
+        const long long eiqBad = endpointInQuadViolations( eiqSet );
+        if ( eiqBad != 0 )
+            ++local;
+        // The fixture must be a real conflict exactly when EIQ rejects one.
+        if ( ( sfBad > 0 ) != ( p.eiqAccepted.size() == 1 ) )
+            ++local;
+
+        if ( rank == 0 )
+        {
+            std::string acc;
+            for ( const EdgeKey& k : eiqKeys )
+                acc += ( acc.empty() ? "" : " " ) + keyStr( k );
+            std::printf( "  [%s] case14 %s %s+%s: SharedFace accepted=%lld "
+                         "conflict=%lld violations=%lld; EndpointInQuad "
+                         "accepted=%lld conflict=%lld violations=%lld "
+                         "{%s}\n",
+                         tag, p.name, keyStr( p.a ).c_str(),
+                         keyStr( p.b ).c_str(), sf.accepted,
+                         sf.rejectedConflict, sfBad, eiq.accepted,
+                         eiq.rejectedConflict, eiqBad, acc.c_str() );
+        }
+    }
+
+    // Every owned edge of the icosphere marked: no accepted pair conflicts,
+    // and the accepted set equals the one the same run computes alone.
+    FlipSet sfW, eiqW, eiqS;
+    const std::set<EdgeKey> none;
+    const FlipResult sf = conflictRun<MeshT, Exec>(
+        MPI_COMM_WORLD, nullptr, none, FlipConflict::SharedFace, sfW, local );
+    const FlipResult w = conflictRun<MeshT, Exec>(
+        MPI_COMM_WORLD, nullptr, none, FlipConflict::EndpointInQuad, eiqW,
+        local );
+    const FlipResult s = conflictRun<MeshT, Exec>(
+        MPI_COMM_SELF, nullptr, none, FlipConflict::EndpointInQuad, eiqS,
+        local );
+    const long long sfBad = endpointInQuadViolations( sfW );
+    const long long wBad = endpointInQuadViolations( eiqW );
+    const long long sBad = endpointInQuadViolations( eiqS );
+    if ( wBad != 0 || sBad != 0 )
+        ++local;
+    if ( w.accepted <= 0 )
+        ++local; // vacuous: the case proves nothing if nothing was flipped
+    if ( eiqW != eiqS )
+        ++local; // the accepted set depends on the decomposition
+    if ( w.accepted != s.accepted || w.requested != s.requested ||
+         w.rejectedBoundary != s.rejectedBoundary ||
+         w.rejectedDuplicateEdge != s.rejectedDuplicateEdge ||
+         w.rejectedGeometric != s.rejectedGeometric ||
+         w.rejectedConflict != s.rejectedConflict )
+        ++local;
+
+    const int glob = gsum( MPI_COMM_WORLD, local );
+    if ( rank == 0 )
+    {
+        std::printf( "  [%s] case14 icosphere all marked: requested=%lld; "
+                     "SharedFace accepted=%lld conflict=%lld violations=%lld; "
+                     "EndpointInQuad accepted=%lld dup=%lld geom=%lld "
+                     "conflict=%lld violations=%lld (SELF accepted=%lld "
+                     "violations=%lld, set %s)\n",
+                     tag, w.requested, sf.accepted, sf.rejectedConflict,
+                     sfBad, w.accepted, w.rejectedDuplicateEdge,
+                     w.rejectedGeometric, w.rejectedConflict, wBad,
+                     s.accepted, sBad, eiqW == eiqS ? "identical" : "DIFFERS" );
+        std::printf( "  [%s] case14 (endpoint-in-quad conflict, np%d) %s\n",
+                     tag, size, glob == 0 ? "ok" : "FAIL" );
+    }
+    return glob == 0 ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// Case 15's fixtures: the flat bipyramid, and a copy with ring vertex 5 pushed
+// out to radius kPushOut.
+// ---------------------------------------------------------------------------
+//
+// Ring edges (2,3) and (5,6) both have opposite corners 0 and 1, so both flips
+// create the axis (0,1), which is not an edge. They share no face, and neither
+// has an endpoint among the other's corners, so neither FlipConflict relation
+// separates them; only the claim on the new diagonal does. The new faces are
+// (lo, x, w) = (lo, 1, 0) and (hi, w, x) = (hi, 0, 1).
+//
+// On flatBipyramidSoup itself the two ring edges have the same length up to
+// rounding (a Python transcription of the soup gives squared lengths
+// 0.99999999999999978 and 0.99999999999999922), so the priority picks one of
+// them and the case asserts only that the pick is rank-count invariant and is
+// the one the soup coordinates predict.
+//
+// On the perturbed copy (5,6) is longer -- squared length 2.9999999999999987
+// against 0.99999999999999978 -- and so has the higher priority, and its new
+// face through vertex 5 is elongated: worst radius ratio 0.73625936037355844,
+// against 0.87969658092961811 for (2,3). minQuality = kDiagThreshold sits
+// between them, so (5,6) fails geometry and must not veto (2,3).
+static const double kPushOut = 2.0;
+static const double kDiagThreshold = 0.8;
+
+static TriangleSoup<double> pushedBipyramidSoup()
+{
+    EdgeKey unused;
+    TriangleSoup<double> soup = flatBipyramidSoup( unused );
+    soup.positions[3 * 5 + 0] *= kPushOut;
+    soup.positions[3 * 5 + 1] *= kPushOut;
+    return soup;
+}
+
+//! One flipEdges() under `mode` on a flat-bipyramid soup, with `marked`
+//! marked, maxNormalDeviation = pi and minQuality = `minQuality`. Returns the
+//! result and the global flip set.
+template <class MeshT, class Exec>
+static FlipResult diagonalRun( MPI_Comm comm, const TriangleSoup<double>& soup,
+                               const std::set<EdgeKey>& marked,
+                               FlipConflict mode, double minQuality,
+                               std::set<std::pair<EdgeKey, EdgeKey>>& flips,
+                               int& local )
+{
+    using mem = typename Exec::memory_space;
+    MeshT mesh( comm );
+    MeshHalo<mem> halo;
+    buildFromTriangleSoup( mesh, soup );
+    auto faceOwner = facePartitionByAxis( mesh );
+    distribute( mesh, halo, faceOwner );
+
+    long long V, E, F;
+    counts( mesh, V, E, F );
+    if ( V != 8 || E != 18 || F != 12 )
+        ++local; // fixture drifted
+
+    DefaultFlipPolicy policy;
+    policy.maxNormalDeviation = std::acos( -1.0 );
+    policy.minQuality = minQuality;
+    policy.conflict = mode;
+    const FlipResult res =
+        flipEdges( mesh, halo, maskFromKeys( mesh, marked ), policy );
+
+    local += checkAll( mesh, V, E, F );
+    local += checkCountersPartition( res );
+    local += TesseraTest::checkKeyTables( mesh ); // no two edges keyed (0,1)
+    flips = globalFlipSet( comm, res );
+    if ( static_cast<long long>( flips.size() ) != res.accepted )
+        ++local; // the flip map is not complete/consistent
+    if ( res.requested != static_cast<long long>( marked.size() ) ||
+         res.rejectedBoundary != 0 || res.rejectedDuplicateEdge != 0 )
+        ++local; // (0,1) is not a pre-flip edge
+    return res;
+}
+
+//! Case 15: two flips that would create the same new diagonal are never both
+//! accepted, under either relation. The higher-priority geometric survivor
+//! wins and the other counts into rejectedConflict; a higher-priority claimant
+//! that fails geometry does not veto the other.
+template <class MeshT, class Exec>
+static int caseSameDiagonal( int rank, const char* tag )
+{
+    using FlipSet = std::set<std::pair<EdgeKey, EdgeKey>>;
+    int local = 0;
+    auto key = []( int a, int b )
+    {
+        return makeEdgeKey( static_cast<GlobalId>( a ),
+                            static_cast<GlobalId>( b ) );
+    };
+    const EdgeKey e23 = key( 2, 3 ), e56 = key( 5, 6 ), axis = key( 0, 1 );
+    const std::set<EdgeKey> marked = { e23, e56 };
+    EdgeKey unused;
+    const TriangleSoup<double> flat = flatBipyramidSoup( unused );
+    const TriangleSoup<double> pushed = pushedBipyramidSoup();
+
+    // THE PREMISE, from the soup coordinates: each ring edge's squared length
+    // (as the library computes its priority) and the worst radius ratio of its
+    // new faces (lo, 1, 0) and (hi, 0, 1).
+    auto len2Of = []( const TriangleSoup<double>& s, const EdgeKey& k )
+    {
+        const double* P = s.positions.data();
+        return edgeLen2Canonical( k.id[0], P + 3 * k.id[0], k.id[1],
+                                  P + 3 * k.id[1], 3 );
+    };
+    auto worstNew = []( const TriangleSoup<double>& s, const EdgeKey& k )
+    {
+        const double* P = s.positions.data();
+        const double* lo = P + 3 * k.id[0];
+        const double* hi = P + 3 * k.id[1];
+        return std::min(
+            Tessera::detail::flipRadiusRatio( lo, P + 3, P + 0 ),
+            Tessera::detail::flipRadiusRatio( hi, P + 0, P + 3 ) );
+    };
+    const double flat23 = len2Of( flat, e23 ), flat56 = len2Of( flat, e56 );
+    const double push23 = len2Of( pushed, e23 ), push56 = len2Of( pushed, e56 );
+    const double q23 = worstNew( pushed, e23 ), q56 = worstNew( pushed, e56 );
+    if ( !( push56 > push23 ) )
+        ++local; // (5,6) must have the higher priority on the pushed soup
+    if ( !( q56 < kDiagThreshold && q23 >= kDiagThreshold ) )
+        ++local; // the threshold must separate the two claimants
+    // The flat soup's winner, by (squared length DESCENDING, key ASCENDING).
+    const EdgeKey flatWinner =
+        ( flat56 > flat23 || ( flat56 == flat23 && e56 < e23 ) ) ? e56 : e23;
+
+    const FlipConflict modes[2] = { FlipConflict::SharedFace,
+                                    FlipConflict::EndpointInQuad };
+    const char* names[2] = { "SharedFace", "EndpointInQuad" };
+    std::string line[2];
+    for ( int m = 0; m < 2; ++m )
+    {
+        // Success: the same-diagonal pair accepts exactly one flip, the one
+        // the priority picks, at every rank count.
+        FlipSet w, s;
+        const FlipResult rw = diagonalRun<MeshT, Exec>(
+            MPI_COMM_WORLD, flat, marked, modes[m], 0.0, w, local );
+        const FlipResult rs = diagonalRun<MeshT, Exec>(
+            MPI_COMM_SELF, flat, marked, modes[m], 0.0, s, local );
+        if ( rw.accepted != 1 || rw.rejectedConflict != 1 ||
+             rw.rejectedGeometric != 0 )
+            ++local;
+        if ( rs.accepted != rw.accepted ||
+             rs.rejectedConflict != rw.rejectedConflict )
+            ++local;
+        if ( w != s )
+            ++local; // the winner depends on the decomposition
+        const FlipSet wantFlat = { { flatWinner, axis } };
+        if ( w != wantFlat )
+            ++local; // not the priority's pick, or not the axis
+
+        // Failure direction: the higher-priority (5,6) fails geometry, so
+        // (2,3) is accepted and (5,6) counts as geometric, not conflict.
+        FlipSet p;
+        const FlipResult rp = diagonalRun<MeshT, Exec>(
+            MPI_COMM_WORLD, pushed, marked, modes[m], kDiagThreshold, p,
+            local );
+        if ( rp.accepted != 1 || rp.rejectedGeometric != 1 ||
+             rp.rejectedConflict != 0 )
+            ++local;
+        const FlipSet wantPushed = { { e23, axis } };
+        if ( p != wantPushed )
+            ++local;
+
+        char buf[512];
+        std::snprintf( buf, sizeof( buf ),
+                       "%s: same-diagonal pair accepted=%lld conflict=%lld "
+                       "{%s->%s} (SELF set %s); pushed pair accepted=%lld "
+                       "geom=%lld conflict=%lld {%s}",
+                       names[m], rw.accepted, rw.rejectedConflict,
+                       w.empty() ? "" : keyStr( w.begin()->first ).c_str(),
+                       w.empty() ? "" : keyStr( w.begin()->second ).c_str(),
+                       w == s ? "identical" : "DIFFERS", rp.accepted,
+                       rp.rejectedGeometric, rp.rejectedConflict,
+                       p.empty() ? "" : keyStr( p.begin()->first ).c_str() );
+        line[m] = buf;
+    }
+
+    const int glob = gsum( MPI_COMM_WORLD, local );
+    if ( rank == 0 )
+    {
+        std::printf( "  [%s] case15 premise: flat len2 (2,3)=%.17g "
+                     "(5,6)=%.17g; pushed len2 (2,3)=%.17g (5,6)=%.17g, worst "
+                     "new-face radius ratio (2,3)=%.17g (5,6)=%.17g, "
+                     "minQuality=%.17g\n",
+                     tag, flat23, flat56, push23, push56, q23, q56,
+                     kDiagThreshold );
+        for ( int m = 0; m < 2; ++m )
+            std::printf( "  [%s] case15 %s\n", tag, line[m].c_str() );
+        std::printf( "  [%s] case15 (same new diagonal) %s\n", tag,
+                     glob == 0 ? "ok" : "FAIL" );
+    }
+    return glob == 0 ? 0 : 1;
+}
+
 //! Case 7: the valence use case. The fixture starts optimal, so the assertion
 //! is that three rounds of valence-driven flips do not DEGRADE it.
 template <class MeshT, class Exec>
@@ -1452,6 +2130,9 @@ static int run( int rank, int size, const char* tag )
     fails += caseEmptyAndHalo<MeshT, Exec>( rank, size, tag );
     fails += caseFamilyGuard<MeshT, Exec>( rank, tag );
     fails += caseComposedWithSplit<MeshT, Exec>( rank, tag );
+    fails += caseQualityHook<MeshT, Exec>( rank, tag );
+    fails += caseEndpointInQuad<MeshT, Exec>( rank, size, tag );
+    fails += caseSameDiagonal<MeshT, Exec>( rank, tag );
     std::fflush( stdout );
     return fails;
 }

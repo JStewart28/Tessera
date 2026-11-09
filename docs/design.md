@@ -1078,6 +1078,16 @@ larger. Every length is nonetheless computed through `edgeLen2Canonical()`, the
 library's one canonical producer, so two ranks comparing the same edge get
 bit-identical doubles regardless of endpoint order.
 
+**The geometric test is the policy's, not the library's.** The coordinator
+rejects a flip either of whose new faces points more than
+`policy.maxNormalDeviation` from the area-weighted mean of the two old normals,
+or scores below `policy.minQuality` on `policy.quality(p0, p1, p2)`. Both are
+read from a duck-typed host struct; `DefaultFlipPolicy::quality` is the radius
+ratio scaled to 1 for an equilateral triangle, and a consumer whose remesher
+thresholds a different metric derives from the default and shadows `quality`.
+Because the coordinator holds all four positions, any metric of the triangle's
+corners is expressible.
+
 ### The duplicate-edge round
 
 Does the edge the flip would create already exist? Flipping into an existing edge
@@ -1092,14 +1102,66 @@ for any of this: it is best-effort by design (`migrate()` carries it verbatim, s
 it can name a face no rank holds), and incidence derived from the advertisements
 is true by construction.
 
+The same round stops two flips in one call from creating the **same** edge. Two
+candidates `(a,b | c,d)` and `(a',b' | c,d)` with the same opposite corners would
+both create `(c,d)`. They share no face, and neither has an endpoint among the
+other's corners, so neither conflict relation below separates them, and
+accepting both would leave two edges keyed `(c,d)`. The `(c,d)` coordinator
+receives a query from every candidate that would create `(c,d)`, so it is the one
+rank that sees every claimant, and it resolves them in the existing round with no
+further collective. Each query carries the asker's squared length and its
+geometric pass/fail, and the reply is one of three:
+
+- **exists**: `(c,d)` is a pre-flip edge. Every asker gets it, and counts into
+  `rejectedDuplicateEdge`.
+- **free**: the best asker that passed the geometric test, by the priority
+  `(squared length DESCENDING, EdgeKey ASCENDING)` below; and every asker that
+  failed it, whose own geometric verdict rejects it next.
+- **claimed**: every other asker that passed the geometric test. It lost the new
+  edge to a higher-priority flip with no pre-flip edge in the way, so it counts
+  into `rejectedConflict`.
+
+The geometric test is therefore *evaluated* before this round, so its pass/fail
+can travel in the query, but verdicts are *attributed* in the order boundary,
+duplicate, geometric, conflict: a candidate whose new edge exists counts as a
+duplicate even if it also fails geometry. Filtering the claimants on geometry is
+what stops a winner that is about to fail its own geometric test from vetoing a
+valid flip. The claim winner can still lose the independent-set round, and the
+claimant it shut out is not reconsidered; that is the same deliberate
+non-maximality as the independent set's below, one round at one bounded cost.
+On a call in which no two geometric survivors share a new edge, nobody is
+answered *claimed*, and every verdict is what the pre-flip check alone gives.
+
 ### The independent set, and why the priority carries no gid
 
-Two flips sharing a **face** conflict; two sharing only a vertex do not. No graph
-traversal is needed for that relation: each face owner sees its own three edges'
-verdicts, keeps the highest-priority candidate and endorses only that one back
-through the coordinator, which accepts an edge exactly when **both** its faces
-endorse it. A face can endorse at most one candidate, so no face is ever
-rewritten twice.
+The policy's `conflict` member chooses between two relations.
+
+**`FlipConflict::SharedFace`, the default.** Two flips sharing a **face**
+conflict; two sharing only a vertex do not. No graph traversal is needed for that
+relation: each face owner sees its own three edges' verdicts, keeps the
+highest-priority candidate and endorses only that one back through the
+coordinator, which accepts an edge exactly when **both** its faces endorse it. A
+face can endorse at most one candidate, so no face is ever rewritten twice.
+
+**`FlipConflict::EndpointInQuad`.** Two flips conflict iff a vertex is an
+**endpoint** of one and any of the four quad **corners** of the other; two
+sharing only an opposite corner do not. This is the symmetric form of a
+sequential valence pass that counts valences once, marks all four corners of each
+accepted flip touched, and skips a later edge iff one of its *own endpoints* is
+touched. It implies the face relation, because a flip sharing a face with another
+has both its endpoints among the other's corners, so the per-face round does not
+run. Instead each candidate is offered to the vertex coordinator
+(`detail::vertexCoordRank`, gid modulo the communicator size) of each of its four
+corners, tagged with the corner's role, endpoint or opposite. At the coordinator
+of $v$, let $B$ be the highest-priority candidate naming $v$. If $B$ names $v$ as
+an endpoint, $B$ alone is endorsed; otherwise every candidate naming $v$ as
+opposite is endorsed and none naming it as an endpoint. A candidate is accepted
+iff it collects all four endorsements.
+
+No conflicting pair is accepted. If accepted flips $E_1$ and $E_2$ conflicted at
+$v$, with $v$ an endpoint of $E_1$, then $E_1$ was endorsed at $v$ as an endpoint,
+so $B = E_1$ and $E_1$ was the only candidate endorsed at $v$ — but $E_2$ names
+$v$ and needed that endorsement too.
 
 **The priority is `(squared length descending, EdgeKey ascending)` and contains
 no gid.** Gids come from an `MPI_Exscan`: they are agreed across the ranks of one
@@ -1108,12 +1170,12 @@ finding that forced `splitEdges()`' diagonal tie-break away from the closure's
 lower-midpoint-gid rule, and it applies with full force here, because the whole
 value of a deterministic independent set is that it is a property of the mesh
 rather than of its decomposition. An `EdgeKey` is built from pre-existing vertex
-gids and *is* invariant, so the pair is a total order on distinct edges and the
-accepted set is a pure function of the global mesh.
+gids and *is* invariant, so the pair is a total order on distinct edges and, under
+either relation, the accepted set is a pure function of the global mesh.
 
-The result is an independent set, **not a maximal one**: an edge that loses on
-one face is not reconsidered when that face's winner is itself vetoed by its own
-other face. That is deliberate — one round, one bounded cost — and the caller
+The result is an independent set, **not a maximal one**: an edge that loses at
+one endorsing site — a face, or a vertex coordinator — is not reconsidered when
+that site's winner is itself vetoed at another. That is deliberate — one round, one bounded cost — and the caller
 loops, watching `accepted`, which is also what lets it re-derive valences between
 rounds.
 
@@ -1263,7 +1325,13 @@ priority and the merged position — and asks the two vertex coordinators one
 question each, whose reply carries the endpoint's ring, its owner, every owned face
 and owned edge incident on it *with owners*, and the **geometric verdict**. The
 fold and quality tests are evaluated *there* because the vertex coordinator is the
-only place where every surviving face incident on an endpoint is known. There is no
+only place where every surviving face incident on an endpoint is known. The
+quality test thresholds `policy.quality(p0, p1, p2)` on each surviving face with
+the merged corner in place, against `policy.minQuality`; the default is the same
+radius ratio `DefaultFlipPolicy::quality` returns, and a consumer supplies its
+own metric by shadowing `quality` in a derived policy. That hook exists because
+the test needs both endpoints' full one-rings, which only the vertex coordinator
+assembles — a caller cannot reproduce it while building the mask. There is no
 shared advertisement helper with `flipEdges()`: `detail::FlipAdvert` is private to
 that header and carries a flip-specific payload, and a shared abstraction over two
 payloads that differ was not worth destabilising an operation that is green at ten
